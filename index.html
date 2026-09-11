@@ -248,6 +248,35 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 
 .diag-txt{font-size:13.5px;line-height:1.6;color:var(--ink);}
 .diag-txt code{background:var(--bg);padding:2px 6px;border-radius:4px;font-family:var(--fm);font-size:11.5px;word-break:break-all;}
+
+.site-hint{display:block;font-size:11.5px;margin-top:4px;}
+.site-hint.ok{color:#1F6B36;}
+.site-hint.no{color:#9C4A21;}
+.lien-imp{background:none;border:none;padding:0;font:inherit;color:#2A5490;text-decoration:underline;cursor:pointer;}
+
+.map-pick{flex:1;display:flex;flex-direction:column;gap:3px;min-width:0;}
+.map-ex{font-size:11px;color:var(--soft);font-family:var(--fm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:2px;}
+
+.eqbox{background:#F4F8FC;border:1.5px solid #C9DCEC;border-radius:9px;padding:12px 14px;}
+.eqbox.vide{color:#2A5490;font-size:13px;text-align:center;padding:16px 14px;}
+.eqbox-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.eqbox-titre{flex:1;font-size:13px;font-weight:700;color:#2A5490;text-transform:uppercase;letter-spacing:.02em;}
+.eqbox-vide{font-size:12.5px;color:#2A5490;margin:0;line-height:1.5;}
+.eqlist{display:flex;flex-direction:column;gap:6px;}
+.eqitem{display:flex;align-items:center;gap:7px;background:#fff;border:1.5px solid #DCE8F3;border-radius:7px;padding:9px 11px;}
+.eqitem-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.eqitem-txt strong{font-size:13.5px;}
+.eqitem-txt span{font-size:11.5px;color:var(--soft);}
+.eqbtn{background:transparent;border:1.5px solid var(--line);border-radius:6px;width:28px;height:28px;flex-shrink:0;cursor:pointer;color:var(--soft);display:flex;align-items:center;justify-content:center;}
+.eqbtn:hover{border-color:var(--amber2);color:var(--ink);}
+.eqbtn.del:hover{border-color:var(--rust);color:var(--rust);}
+
+.feuilles{display:flex;flex-direction:column;gap:7px;margin-bottom:6px;}
+.feuille-btn{text-align:left;background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;transition:all .12s;}
+.feuille-btn:hover{border-color:var(--amber2);background:#FFFDF8;}
+.feuille-btn.reco{border-color:#9EC4A8;background:#F4FAF5;}
+.feuille-btn strong{flex:1;font-size:14px;}
+.feuille-btn span{font-size:11px;font-weight:600;color:#1F6B36;background:#E4F3E8;padding:3px 8px;border-radius:20px;}
 </style>
 </head>
 <body>
@@ -546,6 +575,7 @@ function bindSiteAuto(){
     if(eqs.length===1) applyEquip(eqs[0]);
     else if(eqs.length>1) choisirEquip(c);
     else toast(true,'Client s\u00e9lectionn\u00e9.');
+    rafraichirEquip();
   }
 }
 
@@ -843,6 +873,240 @@ function visibleParMoi(e){
   return !t || t===moi;
 }
 
+
+/* ═══════════════ LECTURE DES FICHIERS EXCEL (.xlsx) ═══════════════
+   Un .xlsx est une archive ZIP contenant du XML.
+   On lit l'archive puis on décompresse avec DecompressionStream,
+   présent nativement dans les navigateurs récents. */
+
+function xlsxDispo(){ return typeof DecompressionStream !== 'undefined'; }
+
+/* ─── Lecture de l'archive ZIP ─── */
+function zipEntrees(buffer){
+  var vue = new DataView(buffer);
+  var oct = new Uint8Array(buffer);
+  /* Fin du répertoire central : signature 0x06054b50, cherchée depuis la fin */
+  var fin = -1;
+  for(var i = oct.length - 22; i >= 0 && i > oct.length - 66000; i--){
+    if(vue.getUint32(i, true) === 0x06054b50){ fin = i; break; }
+  }
+  if(fin < 0) throw new Error('Archive illisible');
+
+  var nb     = vue.getUint16(fin + 10, true);
+  var depart = vue.getUint32(fin + 16, true);
+  var liste  = {};
+  var p = depart;
+
+  for(var n = 0; n < nb; n++){
+    if(vue.getUint32(p, true) !== 0x02014b50) break;
+    var methode   = vue.getUint16(p + 10, true);
+    var tailleC   = vue.getUint32(p + 20, true);
+    var tailleD   = vue.getUint32(p + 24, true);
+    var lgNom     = vue.getUint16(p + 28, true);
+    var lgExtra   = vue.getUint16(p + 30, true);
+    var lgComm    = vue.getUint16(p + 32, true);
+    var offLocal  = vue.getUint32(p + 42, true);
+    var nom = new TextDecoder('utf-8').decode(oct.subarray(p + 46, p + 46 + lgNom));
+
+    /* En-tête local : la taille des champs peut différer */
+    var lgNomL   = vue.getUint16(offLocal + 26, true);
+    var lgExtraL = vue.getUint16(offLocal + 28, true);
+    var debut    = offLocal + 30 + lgNomL + lgExtraL;
+
+    liste[nom] = {methode:methode, debut:debut, tailleC:tailleC, tailleD:tailleD};
+    p += 46 + lgNom + lgExtra + lgComm;
+  }
+  return {oct:oct, liste:liste};
+}
+
+async function zipLire(archive, nom){
+  var e = archive.liste[nom];
+  if(!e) return null;
+  var brut = archive.oct.subarray(e.debut, e.debut + (e.methode===0 ? e.tailleD : e.tailleC));
+  if(e.methode === 0){                       /* non compressé */
+    return new TextDecoder('utf-8').decode(brut);
+  }
+  if(e.methode !== 8) throw new Error('Compression non prise en charge');
+  var flux = new Blob([brut]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  var buf  = await new Response(flux).arrayBuffer();
+  return new TextDecoder('utf-8').decode(buf);
+}
+
+/* ─── Conversion « B12 » → index de colonne ─── */
+function colIndex(ref){
+  var m = /^([A-Z]+)/.exec(ref || '');
+  if(!m) return 0;
+  var s = m[1], n = 0;
+  for(var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n - 1;
+}
+
+/* ─── Liste des feuilles du classeur ─── */
+/* Lecture directe du XML : les préfixes de namespace (r:id) sont mal gérés
+   par getAttribute selon les navigateurs, on évite DOMParser ici. */
+async function feuillesXLSX(buffer){
+  if(!xlsxDispo()) throw new Error('NAVIGATEUR');
+  var archive = zipEntrees(buffer);
+  var out = [];
+
+  var xmlW = await zipLire(archive, 'xl/workbook.xml');
+  var xmlR = await zipLire(archive, 'xl/_rels/workbook.xml.rels');
+
+  /* Correspondance identifiant -> fichier de feuille */
+  var map = {};
+  if(xmlR){
+    var reR = /<Relationship\b[^>]*>/g, mR;
+    while((mR = reR.exec(xmlR)) !== null){
+      var balR = mR[0];
+      var idR  = /\bId="([^"]*)"/.exec(balR);
+      var tgR  = /\bTarget="([^"]*)"/.exec(balR);
+      if(idR && tgR){
+        map[idR[1]] = tgR[1].replace(/^\/?xl\//,'').replace(/^\//,'');
+      }
+    }
+  }
+
+  if(xmlW){
+    var zoneS = /<sheets>([\s\S]*?)<\/sheets>/.exec(xmlW);
+    var src   = zoneS ? zoneS[1] : xmlW;
+    var reS = /<sheet\b[^>]*\/?>/g, mS, n = 0;
+    while((mS = reS.exec(src)) !== null){
+      var bal = mS[0];
+      n++;
+      var nm  = /\bname="([^"]*)"/.exec(bal);
+      var rid = /\br:id="([^"]*)"/.exec(bal) || /\bid="([^"]*)"/.exec(bal);
+      var etat= /\bstate="([^"]*)"/.exec(bal);
+      if(etat && /hidden/i.test(etat[1])) continue;      /* feuille masquée */
+      var nom = nm ? decodeXML(nm[1]) : ('Feuille '+n);
+      var cible = (rid && map[rid[1]]) ? map[rid[1]] : ('worksheets/sheet'+n+'.xml');
+      var chemin = 'xl/' + cible;
+      if(!archive.liste[chemin]) chemin = 'xl/worksheets/sheet'+n+'.xml';
+      if(archive.liste[chemin]) out.push({nom:nom, chemin:chemin});
+    }
+  }
+
+  if(!out.length){
+    Object.keys(archive.liste)
+      .filter(function(x){ return /^xl\/worksheets\/.*\.xml$/.test(x); })
+      .sort()
+      .forEach(function(x,i){ out.push({nom:'Feuille '+(i+1), chemin:x}); });
+  }
+  return {archive:archive, feuilles:out};
+}
+
+/* Décode les entités XML des noms de feuille */
+function decodeXML(s){
+  return String(s||'')
+    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+    .replace(/&quot;/g,'"').replace(/&apos;/g,"'")
+    .replace(/&#(\d+);/g, function(_,d){ return String.fromCharCode(parseInt(d,10)); })
+    .replace(/&#x([0-9a-f]+);/gi, function(_,h){ return String.fromCharCode(parseInt(h,16)); });
+}
+
+/* ─── Lecture du classeur ─── */
+async function lireXLSX(buffer, cheminChoisi){
+  if(!xlsxDispo()) throw new Error('NAVIGATEUR');
+  var archive = zipEntrees(buffer);
+
+  /* Chaînes partagées */
+  var chaines = [];
+  var xmlS = await zipLire(archive, 'xl/sharedStrings.xml');
+  if(xmlS){
+    var docS = new DOMParser().parseFromString(xmlS, 'application/xml');
+    var si = docS.getElementsByTagName('si');
+    for(var i = 0; i < si.length; i++){
+      var t = si[i].getElementsByTagName('t');
+      var txt = '';
+      for(var j = 0; j < t.length; j++) txt += t[j].textContent;
+      chaines.push(txt);
+    }
+  }
+
+  /* Feuille demandée, sinon la première disponible */
+  var cheminFeuille = cheminChoisi || 'xl/worksheets/sheet1.xml';
+  if(!archive.liste[cheminFeuille]){
+    var noms = Object.keys(archive.liste).filter(function(n){
+      return /^xl\/worksheets\/.*\.xml$/.test(n);
+    }).sort();
+    if(!noms.length) throw new Error('Aucune feuille trouvée');
+    cheminFeuille = noms[0];
+  }
+  var xmlF = await zipLire(archive, cheminFeuille);
+  if(!xmlF) throw new Error('Feuille illisible');
+
+  var doc  = new DOMParser().parseFromString(xmlF, 'application/xml');
+  var rows = doc.getElementsByTagName('row');
+  var res  = [];
+
+  for(var r = 0; r < rows.length; r++){
+    var cells = rows[r].getElementsByTagName('c');
+    var ligne = [];
+    for(var c = 0; c < cells.length; c++){
+      var cell = cells[c];
+      var idx  = colIndex(cell.getAttribute('r'));
+      var type = cell.getAttribute('t');
+      var val  = '';
+      if(type === 'inlineStr'){
+        var is = cell.getElementsByTagName('t');
+        for(var k = 0; k < is.length; k++) val += is[k].textContent;
+      } else {
+        var v = cell.getElementsByTagName('v')[0];
+        if(v){
+          val = v.textContent;
+          if(type === 's'){ val = chaines[parseInt(val, 10)] || ''; }
+        }
+      }
+      while(ligne.length < idx) ligne.push('');
+      ligne[idx] = String(val).trim();
+    }
+    if(ligne.some(function(x){ return x !== ''; })) res.push(ligne);
+  }
+  return res;
+}
+
+
+/* Choix de la feuille à importer quand le classeur en contient plusieurs */
+function choisirFeuille(buffer, feuilles){
+  /* Une feuille nommée « visites » ou « clients » est proposée en premier */
+  var pref = -1;
+  feuilles.forEach(function(f,i){
+    var n=(f.nom||'').toLowerCase();
+    if(pref<0 && (n.indexOf('visite')>=0 || n.indexOf('client')>=0)) pref=i;
+  });
+  if(pref<0) pref=0;
+
+  q('#modal').innerHTML=
+    '<div class="mbg" id="mbg"><div class="mbox sm">'+
+      '<h3>Quelle feuille importer ?</h3>'+
+      '<p class="cfg-hint">Ce classeur contient '+feuilles.length+' feuilles.</p>'+
+      '<div class="feuilles">'+
+        feuilles.map(function(f,i){
+          return '<button class="feuille-btn'+(i===pref?' reco':'')+'" data-fi="'+i+'">'+
+            '<strong>'+esc(f.nom)+'</strong>'+(i===pref?'<span>sugg\u00e9r\u00e9e</span>':'')+
+          '</button>';
+        }).join('')+
+      '</div>'+
+      '<div class="mact"><button class="btn ghost" id="fs-can">Annuler</button></div>'+
+    '</div></div>';
+  q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
+  q('#fs-can').onclick=closeModal;
+  qa('.feuille-btn').forEach(function(b){
+    b.onclick=async function(){
+      var f=feuilles[parseInt(b.dataset.fi,10)];
+      closeModal();
+      toast(true,'Lecture de \u00ab '+f.nom+' \u00bb\u2026');
+      try{
+        var rows=await lireXLSX(buffer, f.chemin);
+        if(!rows || rows.length<2){ toast(false,'Cette feuille ne contient pas de donn\u00e9es.'); return; }
+        mapCSV(rows);
+      }catch(err){
+        console.error(err);
+        diagSync('Feuille illisible','La feuille \u00ab '+esc(f.nom)+' \u00bb n\u2019a pas pu \u00eatre lue.');
+      }
+    };
+  });
+}
+
 /* ═══════════════════ FICHIER CLIENTS ═══════════════════ */
 var CLIENTS = [];
 
@@ -897,8 +1161,8 @@ function renderClientList(){
   if(!list.length){
     cont.className='';
     cont.innerHTML='<div class="empty"><h3>'+(CLIENTS.length?'Aucun r\u00e9sultat':'Aucun client')+'</h3>'+
-      '<p>'+(CLIENTS.length?'Essayez un autre terme.':'Importez votre fichier Excel/CSV ou cr\u00e9ez un client.')+'</p>'+
-      (CLIENTS.length?'':'<button class="btn amber" id="cl-e-imp">'+icon('open',16)+' Importer un fichier CSV</button>')+'</div>';
+      '<p>'+(CLIENTS.length?'Essayez un autre terme.':'Importez votre fichier Excel (.xlsx) ou CSV, ou cr\u00e9ez un client.')+'</p>'+
+      (CLIENTS.length?'':'<button class="btn amber" id="cl-e-imp">'+icon('open',16)+' Importer un fichier Excel ou CSV</button>')+'</div>';
     var b=q('#cl-e-imp'); if(b) b.onclick=importClientsCSV;
     return;
   }
@@ -1013,6 +1277,29 @@ function equipRows(list){
 }
 
 /* ─────────── IMPORT CSV ─────────── */
+
+/* Excel enregistre souvent en ANSI (Windows-1252) et non en UTF-8,
+   ce qui transforme les accents en caractères illisibles.
+   On essaie l'UTF-8 strict, et on retombe sur Windows-1252 en cas d'échec. */
+function decoderCSV(buffer){
+  var octets = new Uint8Array(buffer);
+  /* Marqueur d'ordre des octets UTF-8 : on le retire */
+  if(octets.length>2 && octets[0]===0xEF && octets[1]===0xBB && octets[2]===0xBF){
+    octets = octets.subarray(3);
+  }
+  /* 1 - UTF-8 strict */
+  try{
+    var t = new TextDecoder('utf-8', {fatal:true}).decode(octets);
+    return t;
+  }catch(e){}
+  /* 2 - Windows-1252 (Excel français) */
+  try{
+    return new TextDecoder('windows-1252').decode(octets);
+  }catch(e){}
+  /* 3 - Repli tolérant */
+  return new TextDecoder('utf-8').decode(octets);
+}
+
 function parseCSV(txt){
   /* Détection du séparateur */
   var first=txt.split(/\r?\n/)[0]||'';
@@ -1052,15 +1339,49 @@ function importClientsCSV(){
     var f=e.target.files&&e.target.files[0];
     if(!f) return;
     var rd=new FileReader();
-    rd.onload=function(){
+    rd.onload=async function(){
+      var buf=rd.result;
+      var oct=new Uint8Array(buf);
+      /* Signature « PK » : c'est une archive, donc un classeur Excel */
+      var estExcel = oct.length>1 && oct[0]===0x50 && oct[1]===0x4B;
       var rows;
-      try{ rows=parseCSV(rd.result); }
-      catch(err){ toast(false,'Fichier illisible.'); return; }
-      if(rows.length<2){ toast(false,'Fichier vide ou sans donn\u00e9es.'); return; }
+      if(estExcel){
+        if(!xlsxDispo()){
+          diagSync('Navigateur trop ancien',
+            'La lecture directe des fichiers Excel n\u2019est pas prise en charge ici.<br><br>'+
+            'Dans Excel : <em>Fichier \u2192 Enregistrer sous \u2192 CSV UTF-8</em>, puis importez le fichier obtenu.');
+          return;
+        }
+        toast(true,'Lecture du classeur Excel\u2026');
+        var infos;
+        try{ infos = await feuillesXLSX(buf); }
+        catch(err){
+          console.error(err);
+          diagSync('Classeur illisible',
+            'Le fichier n\u2019a pas pu \u00eatre lu.<br><br>'+
+            'Essayez depuis Excel : <em>Fichier \u2192 Enregistrer sous \u2192 CSV UTF-8</em>.');
+          return;
+        }
+        /* Plusieurs feuilles : on demande laquelle */
+        if(infos.feuilles.length > 1){
+          choisirFeuille(buf, infos.feuilles);
+          return;
+        }
+        try{ rows = await lireXLSX(buf, infos.feuilles[0] && infos.feuilles[0].chemin); }
+        catch(err){
+          console.error(err);
+          diagSync('Feuille illisible','La feuille n\u2019a pas pu \u00eatre lue.');
+          return;
+        }
+      } else {
+        try{ rows = parseCSV(decoderCSV(buf)); }
+        catch(err){ toast(false,'Fichier illisible.'); return; }
+      }
+      if(!rows || rows.length<2){ toast(false,'Fichier vide ou sans donn\u00e9es.'); return; }
       mapCSV(rows);
     };
     rd.onerror=function(){ toast(false,'Lecture impossible.'); };
-    rd.readAsText(f,'UTF-8');
+    rd.readAsArrayBuffer(f);
   };
   inp.click();
 }
@@ -1085,11 +1406,13 @@ function mapCSV(rows){
   q('#modal').innerHTML=
     '<div class="mbg" id="mbg"><div class="mbox" style="max-width:560px;max-height:90vh;overflow-y:auto;">'+
       '<h3>Importer des clients</h3>'+
-      '<p class="cfg-hint"><strong>'+data.length+' ligne(s)</strong> d\u00e9tect\u00e9e(s). V\u00e9rifiez la correspondance des colonnes :</p>'+
+      '<p class="cfg-hint"><strong>'+data.length+' ligne(s)</strong> d\u00e9tect\u00e9e(s). \u00c0 droite, un exemple tir\u00e9 de la premi\u00e8re ligne vous aide \u00e0 v\u00e9rifier :</p>'+
       fields.map(function(f){
         var g=guessCol(headers,f.keys);
+        var ex = (g>=0 && data[0]) ? String(data[0][g]||'').trim() : '';
         return '<div class="map-row"><label>'+f.l+(f.req?' *':'')+'</label>'+
-          '<select data-map="'+f.k+'">'+opts(g)+'</select></div>';
+          '<div class="map-pick"><select data-map="'+f.k+'" data-col="'+f.k+'">'+opts(g)+'</select>'+
+          '<span class="map-ex" id="ex-'+f.k+'">'+(ex?esc(ex.slice(0,32)):'\u2014')+'</span></div></div>';
       }).join('')+
       '<div class="cfg-sep"></div>'+
       '<label class="cl-row"><input type="checkbox" id="csv-replace"><span>Remplacer le fichier existant ('+CLIENTS.length+' client(s))</span></label>'+
@@ -1101,6 +1424,15 @@ function mapCSV(rows){
     '</div></div>';
   q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
   q('#csv-cancel').onclick=closeModal;
+  /* L'aperçu suit le choix de colonne */
+  qa('[data-map]').forEach(function(sel){
+    sel.onchange=function(){
+      var i=parseInt(sel.value,10);
+      var ex=(i>=0 && data[0]) ? String(data[0][i]||'').trim() : '';
+      var sp=q('#ex-'+sel.dataset.col);
+      if(sp) sp.textContent = ex ? ex.slice(0,32) : '\u2014';
+    };
+  });
   q('#csv-go').onclick=async function(){
     var map={};
     qa('[data-map]').forEach(function(s){ map[s.dataset.map]=parseInt(s.value,10); });
@@ -1136,7 +1468,7 @@ function bindCerfaUI(){
   });
   var ba=q('#c-add');   if(ba) ba.onclick=ajouterCerfa;
   var bd=q('#c-del');   if(bd) bd.onclick=function(){ supprimerCerfa(ST.cur.cerfaIdx); };
-  var ea=q('#c-eqadd'); if(ea) ea.onclick=nouvelEquipement;
+  var ea=q('#c-eqadd'); if(ea) ea.onclick=function(){ fenetreEquip(null); };
   var ep=q('#c-eqpick');
   if(ep) ep.onchange=function(){
     var cli=clientDuRapport(ST.cur);
@@ -1145,46 +1477,7 @@ function bindCerfaUI(){
   };
 }
 
-/* Création rapide d'un équipement, mémorisé dans la fiche client */
-function nouvelEquipement(){
-  var cli=clientDuRapport(ST.cur);
-  if(!cli){ toast(false,'S\u00e9lectionnez d\u2019abord un client dans l\u2019onglet Identification.'); return; }
-  q('#modal').innerHTML=
-    '<div class="mbg" id="mbg"><div class="mbox sm">'+
-      '<h3>Nouvel \u00e9quipement</h3>'+
-      '<p class="cfg-hint">Il sera enregistr\u00e9 chez <strong>'+esc(cli.nom)+'</strong> et propos\u00e9 lors des prochaines interventions.</p>'+
-      '<div class="fg">'+
-        '<div class="f full"><label>D\u00e9signation</label><input type="text" id="ne-des" placeholder="Groupe froid, split\u2026"></div>'+
-        '<div class="f"><label>Marque</label><input type="text" id="ne-mar"></div>'+
-        '<div class="f"><label>Mod\u00e8le</label><input type="text" id="ne-mod"></div>'+
-        '<div class="f"><label>N\u00b0 de s\u00e9rie</label><input type="text" id="ne-ser"></div>'+
-        '<div class="f"><label>Fluide</label><input type="text" id="ne-flu" placeholder="R-410A"></div>'+
-        '<div class="f"><label>Charge (kg)</label><input type="text" id="ne-chg"></div>'+
-      '</div>'+
-      '<div class="mact"><button class="btn ghost" id="ne-can">Annuler</button>'+
-        '<button class="btn amber" id="ne-ok">'+icon('check',14)+' Enregistrer</button></div>'+
-    '</div></div>';
-  q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
-  q('#ne-can').onclick=closeModal;
-  q('#ne-ok').onclick=async function(){
-    var e=defEquip();
-    e.designation=q('#ne-des').value.trim();
-    e.marque=q('#ne-mar').value.trim();
-    e.modele=q('#ne-mod').value.trim();
-    e.serie=q('#ne-ser').value.trim();
-    e.fluide=q('#ne-flu').value.trim();
-    e.charge=q('#ne-chg').value.trim();
-    if(!e.designation&&!e.marque&&!e.serie){ toast(false,'Renseignez au moins la d\u00e9signation ou la marque.'); return; }
-    cli.equip=cli.equip||[];
-    cli.equip.push(e);
-    await saveClients();
-    closeModal();
-    applyEquip(e);
-    rerenderCerfa();
-    bindCerfaUI();
-    toast(true,'\u00c9quipement enregistr\u00e9 chez '+cli.nom+'.');
-  };
-}
+
 
 
 /* Initialise les pads de signature de la fiche CERFA affichée */
@@ -1274,6 +1567,133 @@ function rerenderCerfa(){
   bindClr();
   bindCerfaUI();
   setTimeout(initSigCerfa,60);
+}
+
+
+/* ═══════════ GESTION DES ÉQUIPEMENTS DEPUIS LE RAPPORT ═══════════ */
+
+/* Encart affiché dans l'onglet Identification */
+function blocEquip(r){
+  var cli = clientDuRapport(r);
+  if(!cli){
+    return '<div class="eqbox vide"><span>S\u00e9lectionnez un client pour g\u00e9rer ses \u00e9quipements.</span></div>';
+  }
+  var eqs = cli.equip || [];
+  return '<div class="eqbox" id="eqbox">'+
+    '<div class="eqbox-head">'+
+      '<span class="eqbox-titre">'+esc(cli.nom)+'</span>'+
+      '<button class="btn ghost sm" id="eq-new">'+icon('plus',13)+' Ajouter</button>'+
+    '</div>'+
+    (eqs.length
+      ? '<div class="eqlist">'+eqs.map(function(e,i){
+          var t=[e.designation,e.marque,e.modele].filter(Boolean).join(' ')||('\u00c9quipement '+(i+1));
+          var d=[e.serie?'n\u00b0 '+e.serie:'', e.fluide, e.charge?e.charge+'\u202fkg':''].filter(Boolean).join(' \u2022 ');
+          return '<div class="eqitem">'+
+            '<div class="eqitem-txt"><strong>'+esc(t)+'</strong>'+(d?'<span>'+esc(d)+'</span>':'')+'</div>'+
+            '<button class="eqbtn" data-eqed="'+i+'" title="Modifier">'+icon('open',13)+'</button>'+
+            '<button class="eqbtn del" data-eqdel="'+i+'" title="Supprimer">'+icon('trash',13)+'</button>'+
+          '</div>';
+        }).join('')+'</div>'
+      : '<p class="eqbox-vide">Aucun \u00e9quipement enregistr\u00e9. Ajoutez-en un : il sera propos\u00e9 automatiquement lors des prochaines interventions et dans la fiche fluides.</p>')+
+  '</div>';
+}
+
+/* Redessine l'encart après modification */
+function rafraichirEquip(){
+  var b=q('#eqbox');
+  if(b){ b.outerHTML = blocEquip(ST.cur); }
+  else {
+    var z=q('#eqzone');
+    if(z) z.innerHTML = blocEquip(ST.cur);
+  }
+  bindEquipBloc();
+  /* Le sélecteur du CERFA suit */
+  if(ST.tab==='cerfa'){ rerenderCerfa(); }
+}
+
+function bindEquipBloc(){
+  var bn=q('#eq-new');
+  if(bn) bn.onclick=function(){ fenetreEquip(null); };
+  qa('[data-eqed]').forEach(function(b){
+    b.onclick=function(){ fenetreEquip(parseInt(b.dataset.eqed,10)); };
+  });
+  qa('[data-eqdel]').forEach(function(b){
+    b.onclick=function(){
+      var cli=clientDuRapport(ST.cur);
+      if(!cli) return;
+      var i=parseInt(b.dataset.eqdel,10);
+      var e=(cli.equip||[])[i];
+      var nom=[e.designation,e.marque].filter(Boolean).join(' ')||'cet \u00e9quipement';
+      doConfirm('Supprimer ?','\u00ab '+nom+' \u00bb sera retir\u00e9 de la fiche de '+cli.nom+'.','Supprimer',
+        async function(){
+          cli.equip.splice(i,1);
+          await saveClients();
+          if(SY.on) pousserClient(cli);
+          rafraichirEquip();
+          toast(true,'\u00c9quipement supprim\u00e9.');
+        }, true);
+    };
+  });
+}
+
+/* Fenêtre de création / modification — index null = création */
+function fenetreEquip(index){
+  var cli=clientDuRapport(ST.cur);
+  if(!cli){ toast(false,'S\u00e9lectionnez d\u2019abord un client.'); return; }
+  var creation = (index===null || index===undefined);
+  var e = creation ? defEquip() : Object.assign({}, (cli.equip||[])[index]);
+
+  q('#modal').innerHTML=
+    '<div class="mbg" id="mbg"><div class="mbox sm">'+
+      '<h3>'+(creation?'Nouvel \u00e9quipement':'Modifier l\u2019\u00e9quipement')+'</h3>'+
+      '<p class="cfg-hint">Enregistr\u00e9 chez <strong>'+esc(cli.nom)+'</strong> et r\u00e9utilisable \u00e0 chaque intervention.</p>'+
+      '<div class="fg">'+
+        '<div class="f full"><label>D\u00e9signation</label><input type="text" id="eq-des" value="'+esc(e.designation||'')+'" placeholder="Groupe froid, split, CTA\u2026"></div>'+
+        '<div class="f"><label>Marque</label><input type="text" id="eq-mar" value="'+esc(e.marque||'')+'"></div>'+
+        '<div class="f"><label>Mod\u00e8le</label><input type="text" id="eq-mod" value="'+esc(e.modele||'')+'"></div>'+
+        '<div class="f"><label>N\u00b0 de s\u00e9rie</label><input type="text" id="eq-ser" value="'+esc(e.serie||'')+'"></div>'+
+        '<div class="f"><label>Fluide</label><input type="text" id="eq-flu" value="'+esc(e.fluide||'')+'" placeholder="R-410A"></div>'+
+        '<div class="f"><label>Charge (kg)</label><input type="text" id="eq-chg" value="'+esc(e.charge||'')+'"></div>'+
+        '<div class="f"><label>Tonnage CO2</label><input type="text" id="eq-co2" value="" readonly style="background:var(--bg);color:var(--soft);"></div>'+
+      '</div>'+
+      '<div class="mact">'+
+        '<button class="btn ghost" id="eq-can">Annuler</button>'+
+        '<button class="btn amber" id="eq-ok">'+icon('check',14)+' Enregistrer</button>'+
+      '</div>'+
+    '</div></div>';
+
+  function majCO2(){
+    var c=calcCO2(q('#eq-flu').value, q('#eq-chg').value);
+    q('#eq-co2').value = c ? c+' t.\u00e9q.CO2' : '\u2014';
+  }
+  q('#eq-flu').oninput=majCO2;
+  q('#eq-chg').oninput=majCO2;
+  majCO2();
+
+  q('#mbg').onclick=function(ev){ if(ev.target.id==='mbg') closeModal(); };
+  q('#eq-can').onclick=closeModal;
+  q('#eq-ok').onclick=async function(){
+    e.designation=q('#eq-des').value.trim();
+    e.marque     =q('#eq-mar').value.trim();
+    e.modele     =q('#eq-mod').value.trim();
+    e.serie      =q('#eq-ser').value.trim();
+    e.fluide     =q('#eq-flu').value.trim();
+    e.charge     =q('#eq-chg').value.trim();
+    if(!e.designation && !e.marque && !e.serie){
+      toast(false,'Renseignez au moins la d\u00e9signation, la marque ou le n\u00b0 de s\u00e9rie.');
+      return;
+    }
+    cli.equip = cli.equip || [];
+    if(creation) cli.equip.push(e);
+    else cli.equip[index]=e;
+    await saveClients();
+    if(SY.on) pousserClient(cli);
+    closeModal();
+    /* Depuis l'onglet CERFA, on reporte directement les valeurs */
+    if(ST.tab==='cerfa') applyEquip(e);
+    rafraichirEquip();
+    toast(true, creation?'\u00c9quipement ajout\u00e9.':'\u00c9quipement mis \u00e0 jour.');
+  };
 }
 
 /* ═══════════ CYCLE DE VIE DU DOSSIER ═══════════ */
@@ -2077,8 +2497,10 @@ function renderForm(){
   bindPhotos();
   bindClr();
   bindSiteAuto();
+  var si=q('#site-imp'); if(si) si.onclick=function(){ ST.view='clients'; ST.clSearch=''; renderApp(); setTimeout(importClientsCSV,150); };
   bindDossier();
   bindCerfaUI();
+  bindEquipBloc();
 }
 
 function goTab(k){
@@ -2111,8 +2533,13 @@ function panelInfo(r){
     '<h3 class="stitle" id="form-title">'+esc(r.site||'Nouveau rapport')+'</h3>'+
     '<div class="fg">'+
       '<div class="f full" style="position:relative;"><label>Site / adresse</label>'+
-        '<input type="text" data-f="site" id="site-input" autocomplete="off" value="'+esc(r.site||'')+'" placeholder="Nom du client ou adresse\u2026">'+
-        '<div id="site-sugg"></div></div>'+
+        '<input type="text" data-f="site" id="site-input" autocomplete="off" value="'+esc(r.site||'')+'" placeholder="'+
+          (CLIENTS.length?'Tapez les premi\u00e8res lettres du client\u2026':'Adresse de l\u2019intervention')+'">'+
+        '<div id="site-sugg"></div>'+
+        (CLIENTS.length
+          ? '<span class="site-hint ok">'+CLIENTS.length+' client'+(CLIENTS.length>1?'s':'')+' disponible'+(CLIENTS.length>1?'s':'')+'</span>'
+          : '<span class="site-hint no">Aucun client enregistr\u00e9 sur cet appareil \u2014 <button type="button" class="lien-imp" id="site-imp">importer le fichier</button></span>')+
+      '</div>'+
       fld('Date du','dateDebut',r.dateDebut,{type:'date'})+
       fld('Heure de d\u00e9but','heureDebut',r.heureDebut,{type:'time'})+
       fld('Date au','dateFin',r.dateFin,{type:'date'})+
@@ -2135,6 +2562,8 @@ function panelInfo(r){
         '<div class="dur-pill"><span id="dur">'+( durée(r)||'')+'</span></div>'+
       '</div>'+
     '</div>'+
+    '<div class="tear">\u00c9quipements du client</div>'+
+    '<div id="eqzone">'+blocEquip(r)+'</div>'+
     '<div class="tear">Suivi du dossier</div>'+
     dossierHtml(r)+
   '</div>';
