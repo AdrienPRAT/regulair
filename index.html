@@ -729,6 +729,26 @@ function diagSync(titre, msg){
 
 
 
+
+/* Récapitulatif affiché après une synchronisation manuelle */
+function bilanSync(envoyes, recus, erreurs){
+  q('#modal').innerHTML=
+    '<div class="mbg" id="bsg"><div class="mbox sm">'+
+      '<h3>'+(erreurs?'Synchronisation partielle':'Synchronisation termin\u00e9e')+'</h3>'+
+      '<div class="mini-stats" style="margin-bottom:12px;">'+
+        '<div><strong>'+envoyes+'</strong><span>envoy\u00e9'+(envoyes>1?'s':'')+'</span></div>'+
+        '<div><strong>'+recus+'</strong><span>re\u00e7u'+(recus>1?'s':'')+'</span></div>'+
+        (erreurs?'<div><strong style="color:var(--rust);">'+erreurs+'</strong><span>erreur'+(erreurs>1?'s':'')+'</span></div>':'')+
+      '</div>'+
+      (erreurs
+        ? '<p class="cfg-hint">Certains \u00e9l\u00e9ments n\u2019ont pas pu \u00eatre transmis. Relancez dans quelques instants ; le d\u00e9tail figure dans la console du navigateur.</p>'
+        : '<p class="cfg-hint">Vos donn\u00e9es et celles de l\u2019\u00e9quipe sont \u00e0 jour.</p>')+
+      '<div class="mact"><button class="btn amber" id="bs-ok">Fermer</button></div>'+
+    '</div></div>';
+  q('#bsg').onclick=function(e){ if(e.target.id==='bsg') closeModal(); };
+  q('#bs-ok').onclick=closeModal;
+}
+
 /* Fenêtre d'avancement de la synchronisation */
 function fenetreProgres(){
   q('#modal').innerHTML=
@@ -843,8 +863,15 @@ async function diagnostic(){
       try{ await fetch(normUrl(SY.url)+'/storage/v1/object/photos/'+chemin, {method:'DELETE', headers:apiHead()}); }catch(e){}
     } else {
       var t4=await r4.text();
-      ajouter('ko','Stockage photos ('+r4.status+')',
-        esc(t4.slice(0,140))+'<br><em>V\u00e9rifiez que le bucket <code>photos</code> existe et autorise l\u2019\u00e9criture.</em>');
+      if(/row-level security|Unauthorized|AccessDenied/i.test(t4)){
+        ajouter('ko','Droits d\u2019\u00e9criture manquants sur le stockage',
+          'Le bucket existe, mais aucune r\u00e8gle n\u2019autorise le d\u00e9p\u00f4t de photos.<br><br>'+
+          'Dans Supabase \u2192 <strong>SQL Editor</strong>, ex\u00e9cutez :<br>'+
+          '<code>create policy "photos_depot" on storage.objects for insert with check (bucket_id = \'photos\');</code><br><br>'+
+          '<em>Les rapports se synchronisent malgr\u00e9 tout, mais les photos restent sur l\u2019appareil.</em>');
+      } else {
+        ajouter('ko','Stockage photos ('+r4.status+')', esc(t4.slice(0,140)));
+      }
     }
   }catch(e){ ajouter('ko','Stockage photos', esc(e.message)); }
 
@@ -884,9 +911,16 @@ async function loadSync(){
   var s = await sGet('sync');
   if(s) SY = Object.assign(SY, s);
   SY.on = !!(SY.url && SY.key);
+  SY.busy = false;          /* un plantage précédent ne doit pas bloquer les suivants */
   return SY;
 }
-async function saveSync(){ SY.on = !!(SY.url && SY.key); return await sSet('sync', SY); }
+async function saveSync(){
+  SY.on = !!(SY.url && SY.key);
+  /* On n'enregistre que les réglages, jamais l'état d'exécution */
+  return await sSet('sync', {
+    url:SY.url, key:SY.key, user:SY.user, role:SY.role, last:SY.last, on:SY.on
+  });
+}
 
 function normUrl(u){
   return String(u||'').trim()
@@ -970,9 +1004,9 @@ async function pousserRapport(r){
     }
     try{ await sSet('r:'+r.id, r); }catch(e){}
   }
-  /* Copie allégée : les images restent dans le stockage */
+  /* Copie allégée : on ne retire l'image que si elle est bien dans le stockage.
+     Si le dépôt a échoué, l'image voyage dans la fiche pour ne pas être perdue. */
   var copie = JSON.parse(JSON.stringify(r));
-  /* On retire l'image seulement si elle est bien dans le stockage */
   if(copie.photos) copie.photos.forEach(function(p){ if(p.url) delete p.dataUrl; });
 
   var ligne = {
@@ -1024,7 +1058,10 @@ async function pousserClients(liste){
 /* ─── Synchronisation complète ─── */
 async function synchroniser(silencieux){
   if(!SY.on){ if(!silencieux) toast(false,'Synchronisation non configur\u00e9e.'); return false; }
-  if(SY.busy) return false;
+  if(SY.busy){
+    if(!silencieux) toast(false,'Synchronisation d\u00e9j\u00e0 en cours\u2026');
+    return false;
+  }
   SY.busy = true;
   majBadgeSync('sync');
   var envoyes=0, recus=0, erreurs=0;
@@ -1101,23 +1138,26 @@ async function synchroniser(silencieux){
 
     SY.last = Date.now();
     await saveSync();
-    SY.busy = false;
     majBadgeSync(erreurs?'err':'ok');
-    if(!silencieux) fermerProgres();
     if(!silencieux){
-      toast(!erreurs, erreurs ? 'Synchronis\u00e9 avec '+erreurs+' erreur(s).'
-                              : envoyes+' envoy\u00e9(s), '+recus+' re\u00e7u(s).');
+      fermerProgres();
+      bilanSync(envoyes, recus, erreurs);
     }
     if(ST.view==='list') renderCards();
     return !erreurs;
 
   }catch(e){
     console.error(e);
-    SY.busy=false;
     majBadgeSync('err');
-    if(!silencieux) fermerProgres();
-    if(!silencieux) toast(false,'Synchronisation impossible. V\u00e9rifiez la connexion.');
+    if(!silencieux){
+      fermerProgres();
+      diagSync('Synchronisation interrompue',
+        'Une erreur a stopp\u00e9 l\u2019\u00e9change :<br><code>'+esc(String(e && e.message || e))+'</code><br><br>'+
+        'Relancez depuis le diagnostic. Les donn\u00e9es d\u00e9j\u00e0 transmises sont conserv\u00e9es.');
+    }
     return false;
+  }finally{
+    SY.busy=false;          /* toujours lib\u00e9r\u00e9, m\u00eame en cas d'erreur */
   }
 }
 
