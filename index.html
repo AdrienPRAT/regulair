@@ -358,6 +358,9 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .dg-tx strong{font-size:13px;}
 .dg-tx span{color:var(--soft);line-height:1.45;word-break:break-word;}
 .dg-tx code{background:#fff;padding:1px 5px;border-radius:3px;font-family:var(--fm);font-size:11px;}
+
+.prog-piste{height:8px;background:var(--bg);border-radius:5px;overflow:hidden;margin-top:6px;}
+.prog-rem{height:100%;background:var(--amber);border-radius:5px;transition:width .3s;}
 </style>
 </head>
 <body>
@@ -725,6 +728,23 @@ function diagSync(titre, msg){
 }
 
 
+
+/* Fenêtre d'avancement de la synchronisation */
+function fenetreProgres(){
+  q('#modal').innerHTML=
+    '<div class="mbg"><div class="mbox sm" style="text-align:center;">'+
+      '<h3>Synchronisation</h3>'+
+      '<div class="prog-piste"><div class="prog-rem" id="prog-rem" style="width:8%"></div></div>'+
+      '<p class="cfg-hint" id="prog-txt" style="margin-top:10px;">Pr\u00e9paration\u2026</p>'+
+    '</div></div>';
+}
+function majProgres(etape, fait, total){
+  var t=q('#prog-txt'), b=q('#prog-rem');
+  if(t) t.textContent = etape + (total ? ' \u2014 '+fait+'/'+total : '\u2026');
+  if(b && total) b.style.width = Math.max(8, Math.round(fait/total*100)) + '%';
+}
+function fermerProgres(){ closeModal(); }
+
 /* ═══════════ DIAGNOSTIC DE LA SYNCHRONISATION ═══════════ */
 
 async function diagnostic(){
@@ -809,12 +829,23 @@ async function diagnostic(){
   }catch(e){ ajouter('ko','\u00c9criture', esc(e.message)); }
 
   /* 6 — Stockage des photos */
+  /* On teste un envoi réel : la clé anon ne peut pas lister les buckets */
   try{
-    var r4=await fetch(normUrl(SY.url)+'/storage/v1/bucket/photos', {headers:apiHead()});
-    if(r4.ok) ajouter('ok','Stockage photos pr\u00eat','Le bucket « photos » existe.');
-    else ajouter('ko','Stockage photos absent',
-      'Cr\u00e9ez un bucket nomm\u00e9 <code>photos</code> dans Supabase \u2192 Storage, coch\u00e9 <strong>Public</strong>.<br>'+
-      '<em>Sans lui, l\u2019envoi des rapports avec photos \u00e9choue.</em>');
+    var petit = new Blob([new Uint8Array([0xFF,0xD8,0xFF,0xD9])], {type:'image/jpeg'});
+    var chemin = '__diag__/test.jpg';
+    var r4 = await fetch(normUrl(SY.url)+'/storage/v1/object/photos/'+chemin, {
+      method:'POST',
+      headers:{'apikey':SY.key,'Authorization':'Bearer '+SY.key,'Content-Type':'image/jpeg','x-upsert':'true'},
+      body: petit
+    });
+    if(r4.ok || r4.status===409){
+      ajouter('ok','Stockage photos op\u00e9rationnel','Envoi test r\u00e9ussi.');
+      try{ await fetch(normUrl(SY.url)+'/storage/v1/object/photos/'+chemin, {method:'DELETE', headers:apiHead()}); }catch(e){}
+    } else {
+      var t4=await r4.text();
+      ajouter('ko','Stockage photos ('+r4.status+')',
+        esc(t4.slice(0,140))+'<br><em>V\u00e9rifiez que le bucket <code>photos</code> existe et autorise l\u2019\u00e9criture.</em>');
+    }
   }catch(e){ ajouter('ko','Stockage photos', esc(e.message)); }
 
   /* 7 — Comparaison local / distant */
@@ -963,13 +994,31 @@ async function pousserRapport(r){
 }
 
 async function pousserClient(c){
-  var ligne = {id:c.id, nom:c.nom||'', maj:Date.now(), contenu:c};
-  var resp = await fetch(apiURL('clients'), {
-    method:'POST',
-    headers: apiHead({'Prefer':'resolution=merge-duplicates'}),
-    body: JSON.stringify(ligne)
-  });
-  return resp.ok;
+  return await pousserClients([c]);
+}
+
+/* Envoi par paquets : 200 requêtes successives échouent trop souvent */
+async function pousserClients(liste){
+  if(!liste || !liste.length) return true;
+  var maintenant = Date.now();
+  var LOT = 40, ok = true;
+  for(var d=0; d<liste.length; d+=LOT){
+    var paquet = liste.slice(d, d+LOT).map(function(c){
+      return {id:c.id, nom:c.nom||'', maj:maintenant, contenu:c};
+    });
+    try{
+      var resp = await fetch(apiURL('clients'), {
+        method:'POST',
+        headers: apiHead({'Prefer':'resolution=merge-duplicates,return=minimal'}),
+        body: JSON.stringify(paquet)
+      });
+      if(!resp.ok){
+        console.error('clients', resp.status, await resp.text());
+        ok = false;
+      }
+    }catch(e){ console.error('clients', e); ok = false; }
+  }
+  return ok;
 }
 
 /* ─── Synchronisation complète ─── */
@@ -979,24 +1028,32 @@ async function synchroniser(silencieux){
   SY.busy = true;
   majBadgeSync('sync');
   var envoyes=0, recus=0, erreurs=0;
+  /* Fenêtre de progression pour les envois manuels */
+  if(!silencieux) fenetreProgres();
 
   try{
     /* 1 ─ Envoi des rapports modifiés depuis la dernière synchro */
     for(var i=0;i<ST.idx.length;i++){
       var e = ST.idx[i];
       if((e.upd||0) <= SY.last) continue;
-      var r = await sGet('r:'+e.id);
+      var r = null;
+      try{ r = await sGet('r:'+e.id); }catch(ex){}
       if(!r) continue;
       var ok = false;
-      try{ ok = await pousserRapport(r); }catch(e){ console.error('push',e.id,e); }
+      try{ ok = await pousserRapport(r); }
+      catch(ex){ console.error('Envoi du rapport', e.ref, ex); }
       if(ok) envoyes++; else erreurs++;
+      majProgres('Envoi des rapports', i+1, ST.idx.length);
     }
 
-    /* 2 ─ Envoi des clients */
-    for(var j=0;j<CLIENTS.length;j++){
-      if(await pousserClient(CLIENTS[j])) envoyes++;
+    /* 2 ─ Envoi des clients, par paquets */
+    if(CLIENTS.length){
+      majProgres('Envoi des clients', 0, CLIENTS.length);
+      var okc = await pousserClients(CLIENTS);
+      if(okc) envoyes += CLIENTS.length; else erreurs++;
     }
 
+    majProgres('R\u00e9ception', 0, 0);
     /* 3 ─ Réception des nouveautés */
     var depuis = SY.last || 0;
     var rr = await fetch(apiURL('rapports?maj=gt.'+depuis+'&select=*'), {headers:apiHead()});
@@ -1046,6 +1103,7 @@ async function synchroniser(silencieux){
     await saveSync();
     SY.busy = false;
     majBadgeSync(erreurs?'err':'ok');
+    if(!silencieux) fermerProgres();
     if(!silencieux){
       toast(!erreurs, erreurs ? 'Synchronis\u00e9 avec '+erreurs+' erreur(s).'
                               : envoyes+' envoy\u00e9(s), '+recus+' re\u00e7u(s).');
@@ -1057,6 +1115,7 @@ async function synchroniser(silencieux){
     console.error(e);
     SY.busy=false;
     majBadgeSync('err');
+    if(!silencieux) fermerProgres();
     if(!silencieux) toast(false,'Synchronisation impossible. V\u00e9rifiez la connexion.');
     return false;
   }
