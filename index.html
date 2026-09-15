@@ -344,6 +344,20 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 
 .pdf-actions{display:flex;gap:9px;margin-top:10px;flex-shrink:0;}
 .pdf-actions .btn{flex:1;justify-content:center;}
+
+.dg-liste{display:flex;flex-direction:column;gap:7px;max-height:340px;overflow-y:auto;margin-bottom:4px;}
+.dg-l{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;border-radius:7px;font-size:12.5px;}
+.dg-l.ok{background:#F1F8F3;}
+.dg-l.ko{background:#FDF1EA;}
+.dg-l.info{background:var(--bg);}
+.dg-ic{font-weight:700;flex-shrink:0;width:14px;text-align:center;}
+.dg-l.ok .dg-ic{color:#1F6B36;}
+.dg-l.ko .dg-ic{color:var(--rust);}
+.dg-l.info .dg-ic{color:var(--soft);}
+.dg-tx{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.dg-tx strong{font-size:13px;}
+.dg-tx span{color:var(--soft);line-height:1.45;word-break:break-word;}
+.dg-tx code{background:#fff;padding:1px 5px;border-radius:3px;font-family:var(--fm);font-size:11px;}
 </style>
 </head>
 <body>
@@ -710,6 +724,128 @@ function diagSync(titre, msg){
   q('#dg-ok').onclick=closeModal;
 }
 
+
+/* ═══════════ DIAGNOSTIC DE LA SYNCHRONISATION ═══════════ */
+
+async function diagnostic(){
+  q('#modal').innerHTML=
+    '<div class="mbg" id="mbg"><div class="mbox sm">'+
+      '<h3>Diagnostic</h3>'+
+      '<div id="dg-liste" class="dg-liste"></div>'+
+      '<div class="mact"><button class="btn ghost" id="dg-close">Fermer</button></div>'+
+    '</div></div>';
+  q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
+  q('#dg-close').onclick=closeModal;
+
+  var lignes=[];
+  function ajouter(etat, titre, detail){
+    lignes.push({etat:etat, titre:titre, detail:detail||''});
+    var el=q('#dg-liste');
+    if(el) el.innerHTML = lignes.map(function(l){
+      return '<div class="dg-l '+l.etat+'">'+
+        '<span class="dg-ic">'+(l.etat==='ok'?'\u2713':l.etat==='ko'?'\u2717':'\u2026')+'</span>'+
+        '<span class="dg-tx"><strong>'+esc(l.titre)+'</strong>'+
+        (l.detail?'<span>'+l.detail+'</span>':'')+'</span></div>';
+    }).join('');
+  }
+
+  /* 1 — Configuration */
+  if(!SY.url || !SY.key){
+    ajouter('ko','Synchronisation non configur\u00e9e','Renseignez l\u2019adresse et la cl\u00e9 dans les r\u00e9glages.');
+    return;
+  }
+  ajouter('ok','Configuration pr\u00e9sente', esc(normUrl(SY.url)));
+  ajouter('ok','Identit\u00e9', esc(SY.user||'(non renseign\u00e9)')+' \u2014 r\u00f4le : '+esc(SY.role||'technicien'));
+
+  /* 2 — Contexte */
+  if(location.protocol==='file:'){
+    ajouter('ko','Ouverture locale','Supabase refuse les connexions depuis un fichier. Utilisez l\u2019adresse web.');
+    return;
+  }
+  ajouter('ok','Contexte web', esc(location.host||''));
+
+  /* 3 — Lecture de la table rapports */
+  var nbRapportsDistants = null;
+  try{
+    var r1=await fetch(apiURL('rapports?select=id'), {headers:apiHead({'Prefer':'count=exact'})});
+    if(r1.ok){
+      var d1=await r1.json();
+      nbRapportsDistants = d1.length;
+      ajouter('ok','Table rapports accessible', nbRapportsDistants+' rapport(s) en ligne');
+    } else {
+      var t1=await r1.text();
+      ajouter('ko','Table rapports ('+r1.status+')', esc(t1.slice(0,160)));
+    }
+  }catch(e){ ajouter('ko','Table rapports','Serveur injoignable : '+esc(e.message)); return; }
+
+  /* 4 — Lecture de la table clients */
+  var nbClientsDistants = null;
+  try{
+    var r2=await fetch(apiURL('clients?select=id'), {headers:apiHead()});
+    if(r2.ok){
+      var d2=await r2.json();
+      nbClientsDistants = d2.length;
+      ajouter('ok','Table clients accessible', nbClientsDistants+' client(s) en ligne');
+    } else {
+      var t2=await r2.text();
+      ajouter('ko','Table clients ('+r2.status+')', esc(t2.slice(0,160)));
+    }
+  }catch(e){ ajouter('ko','Table clients', esc(e.message)); }
+
+  /* 5 — Écriture */
+  try{
+    var essai={id:'__test__'+Date.now(), nom:'Test diagnostic', maj:Date.now(), contenu:{id:'__test__'}};
+    var r3=await fetch(apiURL('clients'), {
+      method:'POST', headers:apiHead({'Prefer':'resolution=merge-duplicates'}), body:JSON.stringify(essai)
+    });
+    if(r3.ok){
+      ajouter('ok','\u00c9criture autoris\u00e9e','Les donn\u00e9es peuvent \u00eatre envoy\u00e9es.');
+      await fetch(apiURL('clients?id=eq.'+essai.id), {method:'DELETE', headers:apiHead()});
+    } else {
+      var t3=await r3.text();
+      ajouter('ko','\u00c9criture refus\u00e9e ('+r3.status+')',
+        esc(t3.slice(0,160))+'<br><em>Les r\u00e8gles d\u2019acc\u00e8s (RLS) bloquent l\u2019\u00e9criture.</em>');
+    }
+  }catch(e){ ajouter('ko','\u00c9criture', esc(e.message)); }
+
+  /* 6 — Stockage des photos */
+  try{
+    var r4=await fetch(normUrl(SY.url)+'/storage/v1/bucket/photos', {headers:apiHead()});
+    if(r4.ok) ajouter('ok','Stockage photos pr\u00eat','Le bucket « photos » existe.');
+    else ajouter('ko','Stockage photos absent',
+      'Cr\u00e9ez un bucket nomm\u00e9 <code>photos</code> dans Supabase \u2192 Storage, coch\u00e9 <strong>Public</strong>.<br>'+
+      '<em>Sans lui, l\u2019envoi des rapports avec photos \u00e9choue.</em>');
+  }catch(e){ ajouter('ko','Stockage photos', esc(e.message)); }
+
+  /* 7 — Comparaison local / distant */
+  ajouter('info','Sur cet appareil',
+    ST.idx.length+' rapport(s), '+CLIENTS.length+' client(s)');
+  if(nbRapportsDistants!==null){
+    var ecart = (ST.idx.length!==nbRapportsDistants) || (CLIENTS.length!==(nbClientsDistants||0));
+    ajouter(ecart?'ko':'ok', ecart?'\u00c9cart d\u00e9tect\u00e9':'Donn\u00e9es align\u00e9es',
+      ecart ? 'Lancez une synchronisation compl\u00e8te ci-dessous.' : 'Local et serveur concordent.');
+  }
+
+  /* 8 — Date de dernière synchro */
+  ajouter('info','Derni\u00e8re synchronisation',
+    SY.last ? new Date(SY.last).toLocaleString('fr-FR') : 'jamais');
+
+  /* Bouton de synchronisation forcée */
+  var act=q('.mbox .mact');
+  if(act){
+    act.innerHTML =
+      '<button class="btn ghost" id="dg-close2">Fermer</button>'+
+      '<button class="btn amber" id="dg-force">Tout resynchroniser</button>';
+    q('#dg-close2').onclick=closeModal;
+    q('#dg-force').onclick=async function(){
+      closeModal();
+      SY.last=0;                 /* on repart de zéro : tout remonte et tout redescend */
+      await saveSync();
+      await synchroniser(false);
+    };
+  }
+}
+
 /* ═══════════════════ SYNCHRONISATION CLOUD ═══════════════════ */
 var SY = {url:'', key:'', user:'', role:'technicien', last:0, on:false, busy:false};
 
@@ -793,16 +929,19 @@ async function completerPhotos(r){
 
 /* ─── Envoi d'un rapport ─── */
 async function pousserRapport(r){
-  /* Photos d'abord */
+  /* Photos d'abord — un échec ici ne doit pas bloquer l'envoi du rapport */
   if(r.photos && r.photos.length){
     for(var i=0;i<r.photos.length;i++){
-      var u = await envoyerPhoto(r.id, r.photos[i]);
-      if(u) r.photos[i].url = u;
+      try{
+        var u = await envoyerPhoto(r.id, r.photos[i]);
+        if(u) r.photos[i].url = u;
+      }catch(e){ /* stockage indisponible : on poursuit */ }
     }
     try{ await sSet('r:'+r.id, r); }catch(e){}
   }
   /* Copie allégée : les images restent dans le stockage */
   var copie = JSON.parse(JSON.stringify(r));
+  /* On retire l'image seulement si elle est bien dans le stockage */
   if(copie.photos) copie.photos.forEach(function(p){ if(p.url) delete p.dataUrl; });
 
   var ligne = {
@@ -848,7 +987,8 @@ async function synchroniser(silencieux){
       if((e.upd||0) <= SY.last) continue;
       var r = await sGet('r:'+e.id);
       if(!r) continue;
-      var ok = await pousserRapport(r);
+      var ok = false;
+      try{ ok = await pousserRapport(r); }catch(e){ console.error('push',e.id,e); }
       if(ok) envoyes++; else erreurs++;
     }
 
@@ -3845,6 +3985,7 @@ function openCfg(){
       '<button class="btn ghost" id="sy-test" style="flex:1;justify-content:center;">Tester</button>'+
       '<button class="btn ghost" id="sy-now" style="flex:1;justify-content:center;">Synchroniser</button>'+
     '</div>'+
+    '<button class="btn ghost" id="sy-diag" style="width:100%;justify-content:center;margin-bottom:10px;">Diagnostic d\u00e9taill\u00e9</button>'+
     '<p class="cfg-hint">'+(SY.on
       ? '\u25cf Connect\u00e9'+(SY.last?' \u2014 derni\u00e8re synchro le '+fmtDate(new Date(SY.last).toISOString().slice(0,10)):'')
       : '\u25cb Non configur\u00e9 \u2014 les donn\u00e9es restent sur cet appareil.')+
@@ -3917,6 +4058,13 @@ function openCfg(){
         '\u2022 projet Supabase en pause (les projets gratuits s\u2019arr\u00eatent apr\u00e8s une semaine sans usage \u2014 relancez-le depuis le tableau de bord)<br><br>'+
         'Adresse test\u00e9e :<br><code>'+esc(apiURL('rapports'))+'</code>');
     }
+  };
+  var bdg=q('#sy-diag');
+  if(bdg) bdg.onclick=async function(){
+    SY.url=normUrl(q('#sy-url').value); SY.key=q('#sy-key').value.trim();
+    SY.user=q('#sy-user').value.trim(); SY.role=q('#sy-role').value;
+    await saveSync();
+    diagnostic();
   };
   q('#sy-now').onclick=async function(){
     SY.url=q('#sy-url').value.trim(); SY.key=q('#sy-key').value.trim();
