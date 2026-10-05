@@ -361,6 +361,9 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 
 .prog-piste{height:8px;background:var(--bg);border-radius:5px;overflow:hidden;margin-top:6px;}
 .prog-rem{height:100%;background:var(--amber);border-radius:5px;transition:width .3s;}
+
+.lien-box{background:var(--bg);border:1.5px solid var(--line);border-radius:7px;padding:10px 12px;margin-bottom:10px;max-height:90px;overflow-y:auto;}
+.lien-box code{font-family:var(--fm);font-size:10.5px;word-break:break-all;line-height:1.5;color:var(--ink);}
 </style>
 </head>
 <body>
@@ -765,6 +768,147 @@ function majProgres(etape, fait, total){
 }
 function fermerProgres(){ closeModal(); }
 
+
+/* Journal de la dernière synchronisation, consultable dans le diagnostic */
+var LOG = [];
+function noter(txt, detail){
+  LOG.push({h:new Date().toLocaleTimeString('fr-FR'), t:txt, d:detail||''});
+  if(LOG.length>60) LOG.shift();
+  try{ sSet('synclog', LOG); }catch(e){}
+  console.log('[sync] '+txt, detail||'');
+}
+async function chargerLog(){
+  var l = await sGet('synclog');
+  if(Array.isArray(l)) LOG = l;
+  return LOG;
+}
+
+
+/* ═══════════ INVITATION D'UN COLLABORATEUR ═══════════
+   Un lien contenant les identifiants évite les copier-coller fastidieux. */
+
+function encoderInvit(){
+  try{
+    var charge = JSON.stringify({u:normUrl(SY.url), k:SY.key});
+    return btoa(unescape(encodeURIComponent(charge)))
+      .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  }catch(e){ return ''; }
+}
+
+function decoderInvit(code){
+  try{
+    var s = String(code).replace(/-/g,'+').replace(/_/g,'/');
+    while(s.length % 4) s += '=';
+    return JSON.parse(decodeURIComponent(escape(atob(s))));
+  }catch(e){ return null; }
+}
+
+function lienInvitation(){
+  return location.origin + location.pathname + '?cfg=' + encoderInvit();
+}
+
+/* Au démarrage : si l'adresse contient une invitation, on l'applique */
+async function traiterInvitation(){
+  var code = null;
+  try{ code = new URLSearchParams(location.search).get('cfg'); }catch(e){}
+  if(!code) return false;
+
+  /* Barre d'adresse nettoyée aussitôt */
+  try{ history.replaceState(null, '', location.origin + location.pathname); }catch(e){}
+
+  var cfg = decoderInvit(code);
+  if(!cfg || !cfg.u || !cfg.k){ toast(false,'Lien d\u2019invitation illisible.'); return false; }
+  if(SY.url && normUrl(SY.url)===cfg.u && SY.key===cfg.k) return false;
+
+  return await fenetreInvitation(cfg);
+}
+
+function fenetreInvitation(cfg){
+  return new Promise(function(resolve){
+    q('#modal').innerHTML=
+      '<div class="mbg"><div class="mbox sm">'+
+        '<h3>Rejoindre l\u2019\u00e9quipe</h3>'+
+        '<p style="margin:0 0 12px;">Ce lien configure l\u2019application pour partager les rapports et le fichier clients de REGUL\u2019AIR.</p>'+
+        '<div class="fg" style="margin-bottom:10px;">'+
+          '<div class="f full"><label>Votre nom</label>'+
+            '<input type="text" id="inv-nom" value="'+esc(SY.user||ST.cfg.tech||'')+'" placeholder="Pr\u00e9nom NOM"></div>'+
+          '<div class="f full"><label>Votre r\u00f4le</label><select id="inv-role">'+
+            '<option value="technicien">Technicien \u2014 mes interventions</option>'+
+            '<option value="bureau">Bureau \u2014 toutes les interventions</option>'+
+          '</select></div>'+
+        '</div>'+
+        '<p class="cfg-hint">Indiquez votre nom tel que vous le saisirez dans vos rapports.</p>'+
+        '<div class="mact">'+
+          '<button class="btn ghost" id="inv-non">Plus tard</button>'+
+          '<button class="btn amber" id="inv-oui">'+icon('check',14)+' Rejoindre</button>'+
+        '</div>'+
+      '</div></div>';
+
+    q('#inv-non').onclick=function(){ closeModal(); renderApp(); resolve(false); };
+    q('#inv-oui').onclick=async function(){
+      var nom=q('#inv-nom').value.trim();
+      if(!nom){ toast(false,'Indiquez votre nom.'); return; }
+      SY.url=cfg.u; SY.key=cfg.k; SY.user=nom;
+      SY.role=q('#inv-role').value;
+      SY.last=0;                        /* tout récupérer */
+      await saveSync();
+      if(!ST.cfg.tech){ ST.cfg.tech=nom; await sSet('cfg', ST.cfg); }
+      closeModal();
+      renderApp();
+      toast(true,'Configuration appliqu\u00e9e. R\u00e9cup\u00e9ration en cours\u2026');
+      await synchroniser(false);
+      renderApp();
+      resolve(true);
+    };
+  });
+}
+
+/* Fenêtre de partage, côté administrateur */
+function fenetrePartage(){
+  if(!SY.url || !SY.key){ toast(false,'Configurez d\u2019abord la synchronisation.'); return; }
+  var lien = lienInvitation();
+  q('#modal').innerHTML=
+    '<div class="mbg" id="mbg"><div class="mbox sm">'+
+      '<h3>Inviter un collaborateur</h3>'+
+      '<p class="cfg-hint">Envoyez-lui ce lien. En l\u2019ouvrant, l\u2019application se configure seule : il n\u2019a que son nom \u00e0 indiquer.</p>'+
+      '<div class="lien-box"><code id="inv-lien">'+esc(lien)+'</code></div>'+
+      '<div style="display:flex;gap:8px;margin-bottom:12px;">'+
+        '<button class="btn ghost" id="inv-copier" style="flex:1;justify-content:center;">Copier</button>'+
+        '<button class="btn amber" id="inv-partager" style="flex:1;justify-content:center;">'+icon('mail',14)+' Partager</button>'+
+      '</div>'+
+      '<p class="cfg-hint"><strong>\u00c0 lui transmettre :</strong><br>'+
+        '1. Ouvrir le lien dans Chrome (Android) ou Safari (iPhone)<br>'+
+        '2. Ajouter l\u2019application \u00e0 l\u2019\u00e9cran d\u2019accueil<br>'+
+        '3. La relancer depuis l\u2019ic\u00f4ne et indiquer son nom</p>'+
+      '<p class="cfg-hint"><em>Ce lien contient la cl\u00e9 d\u2019acc\u00e8s : transmettez-le en message priv\u00e9.</em></p>'+
+      '<div class="mact"><button class="btn ghost" id="inv-close">Fermer</button></div>'+
+    '</div></div>';
+
+  q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
+  q('#inv-close').onclick=closeModal;
+  q('#inv-copier').onclick=async function(){
+    try{ await navigator.clipboard.writeText(lien); toast(true,'Lien copi\u00e9.'); }
+    catch(e){
+      try{
+        var el=q('#inv-lien');
+        var r=document.createRange(); r.selectNodeContents(el);
+        var s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        toast(true,'Lien s\u00e9lectionn\u00e9 \u2014 copiez-le.');
+      }catch(e2){ toast(false,'Copie impossible.'); }
+    }
+  };
+  q('#inv-partager').onclick=async function(){
+    var texte='Rejoins l\u2019application REGUL\u2019AIR :\n'+lien+
+              '\n\nOuvre ce lien, ajoute l\u2019application \u00e0 ton \u00e9cran d\u2019accueil, puis indique ton nom.';
+    try{ if(navigator.share){ await navigator.share({title:'REGUL\u2019AIR', text:texte}); return; } }
+    catch(e){ if(e && e.name==='AbortError') return; }
+    var a=document.createElement('a');
+    a.href='mailto:?subject='+encodeURIComponent('Application REGUL\u2019AIR')+'&body='+encodeURIComponent(texte);
+    a.style.display='none'; document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); },300);
+  };
+}
+
 /* ═══════════ DIAGNOSTIC DE LA SYNCHRONISATION ═══════════ */
 
 async function diagnostic(){
@@ -888,16 +1032,28 @@ async function diagnostic(){
   ajouter('info','Derni\u00e8re synchronisation',
     SY.last ? new Date(SY.last).toLocaleString('fr-FR') : 'jamais');
 
+  /* Journal du dernier échange */
+  await chargerLog();
+  if(LOG.length){
+    ajouter('info','Journal du dernier \u00e9change',
+      LOG.map(function(l){ return l.h+' \u2014 '+esc(l.t)+(l.d?' : '+esc(l.d):''); }).join('<br>'));
+  } else {
+    ajouter('ko','Aucun journal','La synchronisation n\u2019a jamais d\u00e9marr\u00e9 sur cet appareil.');
+  }
+
   /* Bouton de synchronisation forcée */
   var act=q('.mbox .mact');
   if(act){
     act.innerHTML =
       '<button class="btn ghost" id="dg-close2">Fermer</button>'+
-      '<button class="btn amber" id="dg-force">Tout resynchroniser</button>';
+      '<button class="btn amber" id="dg-force" style="flex:1;justify-content:center;">'+
+        icon('save',14)+' Tout envoyer maintenant</button>';
     q('#dg-close2').onclick=closeModal;
     q('#dg-force').onclick=async function(){
-      closeModal();
-      SY.last=0;                 /* on repart de zéro : tout remonte et tout redescend */
+      var b=q('#dg-force');
+      if(b){ b.disabled=true; b.textContent='Envoi en cours\u2026'; }
+      SY.last=0;
+      SY.busy=false;
       await saveSync();
       await synchroniser(false);
     };
@@ -1065,6 +1221,7 @@ async function synchroniser(silencieux){
   SY.busy = true;
   majBadgeSync('sync');
   var envoyes=0, recus=0, erreurs=0;
+  LOG=[]; noter('D\u00e9but', 'depuis '+(SY.last||0)+' \u2014 '+ST.idx.length+' rapport(s), '+CLIENTS.length+' client(s) en local');
   /* Fenêtre de progression pour les envois manuels */
   if(!silencieux) fenetreProgres();
 
@@ -1080,6 +1237,7 @@ async function synchroniser(silencieux){
       try{ ok = await pousserRapport(r); }
       catch(ex){ console.error('Envoi du rapport', e.ref, ex); }
       if(ok) envoyes++; else erreurs++;
+      noter('Rapport '+(e.ref||e.id), ok?'envoy\u00e9':'\u00c9CHEC');
       majProgres('Envoi des rapports', i+1, ST.idx.length);
     }
 
@@ -1087,6 +1245,7 @@ async function synchroniser(silencieux){
     if(CLIENTS.length){
       majProgres('Envoi des clients', 0, CLIENTS.length);
       var okc = await pousserClients(CLIENTS);
+      noter('Clients', okc ? CLIENTS.length+' envoy\u00e9s' : '\u00c9CHEC de l\u2019envoi');
       if(okc) envoyes += CLIENTS.length; else erreurs++;
     }
 
@@ -1096,6 +1255,7 @@ async function synchroniser(silencieux){
     var rr = await fetch(apiURL('rapports?maj=gt.'+depuis+'&select=*'), {headers:apiHead()});
     if(rr.ok){
       var lignes = await rr.json();
+      noter('R\u00e9ception rapports', lignes.length+' ligne(s)');
       for(var k=0;k<lignes.length;k++){
         var L = lignes[k];
         var dist = L.contenu;
@@ -1120,12 +1280,13 @@ async function synchroniser(silencieux){
         recus++;
       }
       await sSet('idx', ST.idx);
-    } else erreurs++;
+    } else { noter('R\u00e9ception rapports','\u00c9CHEC '+rr.status); erreurs++; }
 
     /* 4 ─ Réception des clients */
     var rc = await fetch(apiURL('clients?maj=gt.'+depuis+'&select=*'), {headers:apiHead()});
     if(rc.ok){
       var lc = await rc.json();
+      noter('R\u00e9ception clients', lc.length+' ligne(s)');
       lc.forEach(function(L){
         var d = L.contenu;
         if(!d || !d.id) return;
@@ -1136,6 +1297,7 @@ async function synchroniser(silencieux){
       await saveClients();
     } else erreurs++;
 
+    noter('Termin\u00e9', envoyes+' envoy\u00e9(s), '+recus+' re\u00e7u(s), '+erreurs+' erreur(s)');
     SY.last = Date.now();
     await saveSync();
     majBadgeSync(erreurs?'err':'ok');
@@ -1148,6 +1310,7 @@ async function synchroniser(silencieux){
 
   }catch(e){
     console.error(e);
+    noter('INTERRUPTION', String(e && e.message || e));
     majBadgeSync('err');
     if(!silencieux){
       fermerProgres();
@@ -3039,7 +3202,9 @@ async function init(){
   await loadClients();
   await loadSync();
   await chargerModeles();
-  renderApp();
+  /* Lien d'invitation dans l'adresse ? */
+  var invit = await traiterInvitation();
+  if(!invit) renderApp();
   /* Synchronisation silencieuse au démarrage */
   if(SY.on) setTimeout(function(){ synchroniser(true); }, 1500);
   /* Précharger et mettre en cache la bibliothèque PDF */
@@ -4084,7 +4249,8 @@ function openCfg(){
       '<button class="btn ghost" id="sy-test" style="flex:1;justify-content:center;">Tester</button>'+
       '<button class="btn ghost" id="sy-now" style="flex:1;justify-content:center;">Synchroniser</button>'+
     '</div>'+
-    '<button class="btn ghost" id="sy-diag" style="width:100%;justify-content:center;margin-bottom:10px;">Diagnostic d\u00e9taill\u00e9</button>'+
+    '<button class="btn ghost" id="sy-diag" style="width:100%;justify-content:center;margin-bottom:8px;">Diagnostic</button>'+
+    (SY.on?'<button class="btn amber" id="sy-invit" style="width:100%;justify-content:center;margin-bottom:10px;">'+icon('plus',14)+' Inviter un collaborateur</button>':'')+
     '<p class="cfg-hint">'+(SY.on
       ? '\u25cf Connect\u00e9'+(SY.last?' \u2014 derni\u00e8re synchro le '+fmtDate(new Date(SY.last).toISOString().slice(0,10)):'')
       : '\u25cb Non configur\u00e9 \u2014 les donn\u00e9es restent sur cet appareil.')+
@@ -4158,6 +4324,8 @@ function openCfg(){
         'Adresse test\u00e9e :<br><code>'+esc(apiURL('rapports'))+'</code>');
     }
   };
+  var biv=q('#sy-invit');
+  if(biv) biv.onclick=function(){ closeModal(); fenetrePartage(); };
   var bdg=q('#sy-diag');
   if(bdg) bdg.onclick=async function(){
     SY.url=normUrl(q('#sy-url').value); SY.key=q('#sy-key').value.trim();
