@@ -784,6 +784,51 @@ async function chargerLog(){
 }
 
 
+
+/* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
+   Les navigateurs — et surtout iOS — conservent longtemps le cache.
+   On interroge le fichier en ligne et on signale toute nouvelle version. */
+var VERSION = '2026.10.05-0817';
+
+async function verifierMaj(silencieux){
+  try{
+    var url = location.origin + location.pathname + '?maj=' + Date.now();
+    var r = await fetch(url, {cache:'no-store'});
+    if(!r.ok) return false;
+    var txt = await r.text();
+    var m = /var VERSION = '([^']+)'/.exec(txt);
+    if(!m) return false;
+    if(m[1] === VERSION){
+      if(!silencieux) toast(true,'Application \u00e0 jour (version '+VERSION+').');
+      return false;
+    }
+    fenetreMaj(m[1]);
+    return true;
+  }catch(e){
+    if(!silencieux) toast(false,'V\u00e9rification impossible.');
+    return false;
+  }
+}
+
+function fenetreMaj(nouvelle){
+  q('#modal').innerHTML=
+    '<div class="mbg"><div class="mbox sm">'+
+      '<h3>Mise \u00e0 jour disponible</h3>'+
+      '<p style="margin:0 0 10px;">Une nouvelle version de l\u2019application est en ligne.</p>'+
+      '<p class="cfg-hint">Install\u00e9e : '+esc(VERSION)+'<br>Disponible : '+esc(nouvelle)+'</p>'+
+      '<p class="cfg-hint">Vos rapports et clients sont conserv\u00e9s.</p>'+
+      '<div class="mact">'+
+        '<button class="btn ghost" id="mj-non">Plus tard</button>'+
+        '<button class="btn amber" id="mj-oui">Mettre \u00e0 jour</button>'+
+      '</div>'+
+    '</div></div>';
+  q('#mj-non').onclick=closeModal;
+  q('#mj-oui').onclick=function(){
+    /* On recharge en contournant le cache */
+    location.replace(location.origin + location.pathname + '?v=' + Date.now());
+  };
+}
+
 /* ═══════════ INVITATION D'UN COLLABORATEUR ═══════════
    Un lien contenant les identifiants évite les copier-coller fastidieux. */
 
@@ -3205,6 +3250,8 @@ async function init(){
   /* Lien d'invitation dans l'adresse ? */
   var invit = await traiterInvitation();
   if(!invit) renderApp();
+  /* Mise \u00e0 jour disponible ? */
+  setTimeout(function(){ verifierMaj(true); }, 3000);
   /* Synchronisation silencieuse au démarrage */
   if(SY.on) setTimeout(function(){ synchroniser(true); }, 1500);
   /* Précharger et mettre en cache la bibliothèque PDF */
@@ -4251,6 +4298,8 @@ function openCfg(){
     '</div>'+
     '<button class="btn ghost" id="sy-diag" style="width:100%;justify-content:center;margin-bottom:8px;">Diagnostic</button>'+
     (SY.on?'<button class="btn amber" id="sy-invit" style="width:100%;justify-content:center;margin-bottom:10px;">'+icon('plus',14)+' Inviter un collaborateur</button>':'')+
+    '<button class="btn ghost" id="cfg-maj" style="width:100%;justify-content:center;margin-bottom:8px;">V\u00e9rifier les mises \u00e0 jour</button>'+
+    '<p class="cfg-hint" style="text-align:center;">Version '+VERSION+'</p>'+
     '<p class="cfg-hint">'+(SY.on
       ? '\u25cf Connect\u00e9'+(SY.last?' \u2014 derni\u00e8re synchro le '+fmtDate(new Date(SY.last).toISOString().slice(0,10)):'')
       : '\u25cb Non configur\u00e9 \u2014 les donn\u00e9es restent sur cet appareil.')+
@@ -4324,6 +4373,8 @@ function openCfg(){
         'Adresse test\u00e9e :<br><code>'+esc(apiURL('rapports'))+'</code>');
     }
   };
+  var bmj=q('#cfg-maj');
+  if(bmj) bmj.onclick=function(){ verifierMaj(false); };
   var biv=q('#sy-invit');
   if(biv) biv.onclick=function(){ closeModal(); fenetrePartage(); };
   var bdg=q('#sy-diag');
