@@ -790,7 +790,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-0905';
+var VERSION = '2026.10.07-0920';
 
 async function verifierMaj(silencieux){
   try{
@@ -980,12 +980,28 @@ async function diagnostic(){
     }).join('');
   }
 
+  _aide401Vue = false;
+
   /* 1 — Configuration */
   if(!SY.url || !SY.key){
     ajouter('ko','Synchronisation non configur\u00e9e','Renseignez l\u2019adresse et la cl\u00e9 dans les r\u00e9glages.');
     return;
   }
   ajouter('ok','Configuration pr\u00e9sente', esc(normUrl(SY.url)));
+  var _ic = inspecterCle(SY.key);
+  if(_ic.type==='secrete')
+    ajouter('ko','Cl\u00e9 secr\u00e8te \u2014 \u00e0 retirer',
+      'Cette cl\u00e9 donne tous les droits sur la base. Remplacez-la par la cl\u00e9 publique.');
+  else if(_ic.type==='jwt' && _ic.expire)
+    ajouter('ko','Cl\u00e9 expir\u00e9e', 'Elle a cess\u00e9 d\u2019\u00eatre valable le '+
+      new Date(_ic.exp*1000).toLocaleDateString('fr-FR')+'. Recopiez la cl\u00e9 depuis Supabase.');
+  else if(_ic.type==='jwt')
+    ajouter('ok','Cl\u00e9 publique (anon)','Valable jusqu\u2019au '+
+      (_ic.exp?new Date(_ic.exp*1000).toLocaleDateString('fr-FR'):'\u2014'));
+  else if(_ic.type==='publiable')
+    ajouter('ok','Cl\u00e9 publique (nouveau format)','sb_publishable_\u2026');
+  else
+    ajouter('att','Cl\u00e9 non reconnue','Ce n\u2019est ni une cl\u00e9 anon, ni une cl\u00e9 publiable. V\u00e9rifiez le copier-coller.');
   if(SY.role==='bureau'){
     ajouter('ok','Identit\u00e9', esc(SY.user||'(non renseign\u00e9)')+' \u2014 r\u00f4le Bureau : tous les rapports de l\u2019\u00e9quipe sont affich\u00e9s.');
   }else{
@@ -1012,7 +1028,10 @@ async function diagnostic(){
       ajouter('ok','Table rapports accessible', nbRapportsDistants+' rapport(s) en ligne');
     } else {
       var t1=await r1.text();
-      ajouter('ko','Table rapports ('+r1.status+')', esc(t1.slice(0,160)));
+      if(r1.status===401 || r1.status===403)
+        ajouter('ko','Cl\u00e9 refus\u00e9e ('+r1.status+')', aide401());
+      else
+        ajouter('ko','Table rapports ('+r1.status+')', esc(t1.slice(0,160)));
     }
   }catch(e){ ajouter('ko','Table rapports','Serveur injoignable : '+esc(e.message)); return; }
 
@@ -1026,7 +1045,10 @@ async function diagnostic(){
       ajouter('ok','Table clients accessible', nbClientsDistants+' client(s) en ligne');
     } else {
       var t2=await r2.text();
-      ajouter('ko','Table clients ('+r2.status+')', esc(t2.slice(0,160)));
+      if(r2.status===401 || r2.status===403)
+        ajouter('ko','Cl\u00e9 refus\u00e9e ('+r2.status+')', aide401());
+      else
+        ajouter('ko','Table clients ('+r2.status+')', esc(t2.slice(0,160)));
     }
   }catch(e){ ajouter('ko','Table clients', esc(e.message)); }
 
@@ -1042,7 +1064,9 @@ async function diagnostic(){
     } else {
       var t3=await r3.text();
       ajouter('ko','\u00c9criture refus\u00e9e ('+r3.status+')',
-        esc(t3.slice(0,160))+'<br><em>Les r\u00e8gles d\u2019acc\u00e8s (RLS) bloquent l\u2019\u00e9criture.</em>');
+        (r3.status===401
+          ? 'M\u00eame cause que ci-dessus : la cl\u00e9 est refus\u00e9e.'
+          : esc(t3.slice(0,160))+'<br><em>Les r\u00e8gles d\u2019acc\u00e8s (RLS) bloquent l\u2019\u00e9criture.</em>'));
     }
   }catch(e){ ajouter('ko','\u00c9criture', esc(e.message)); }
 
@@ -1115,6 +1139,17 @@ async function diagnostic(){
 }
 
 /* ═══════════════════ SYNCHRONISATION CLOUD ═══════════════════ */
+/* ╔══════════════════════════════════════════════════════════════════╗
+   ║  RÉGLAGES D'ÉQUIPE INTÉGRÉS                                      ║
+   ║  Renseignez ces deux lignes une seule fois, avant de déposer le   ║
+   ║  fichier sur GitHub. Chaque téléphone qui ouvre l'application est ║
+   ║  alors configuré tout seul : plus aucune clé à recopier.          ║
+   ║  Si la clé change un jour, modifiez-la ici et redéployez :        ║
+   ║  tous les appareils la reprendront automatiquement.               ║
+   ╚══════════════════════════════════════════════════════════════════╝ */
+var CFG_URL = 'https://istqnoejijfhzthznqcd.supabase.co';
+var CFG_KEY = '';   /* \u2190 collez ici la cl\u00e9 publique (anon) entre les apostrophes */
+
 var SY = {url:'', key:'', user:'', role:'technicien', last:0, on:false, busy:false};
 /* Marge de recouvrement : on relit toujours les 10 dernières minutes.
    Deux appareils n'ont jamais exactement la même heure, et un rapport
@@ -1143,6 +1178,12 @@ async function lireTout(chemin){
 async function loadSync(){
   var s = await sGet('sync');
   if(s) SY = Object.assign(SY, s);
+  /* Les réglages intégrés au fichier font autorité, sauf si l'utilisateur
+     a saisi les siens à la main dans les Réglages. */
+  if(!SY.manuel){
+    if(CFG_URL) SY.url = CFG_URL;
+    if(CFG_KEY) SY.key = CFG_KEY;
+  }
   SY.on = !!(SY.url && SY.key);
   SY.busy = false;          /* un plantage précédent ne doit pas bloquer les suivants */
   return SY;
@@ -1151,8 +1192,19 @@ async function saveSync(){
   SY.on = !!(SY.url && SY.key);
   /* On n'enregistre que les réglages, jamais l'état d'exécution */
   return await sSet('sync', {
-    url:SY.url, key:SY.key, user:SY.user, role:SY.role, last:SY.last, on:SY.on
+    url:SY.url, key:SY.key, user:SY.user, role:SY.role, last:SY.last, on:SY.on, manuel:!!SY.manuel
   });
+}
+
+/* L'utilisateur n'est "en manuel" que s'il a saisi autre chose que
+   les valeurs intégrées au fichier. S'il remet les valeurs d'équipe
+   (ou vide les champs), on repasse en automatique. */
+function majDrapeauManuel(url, cle){
+  url = normUrl(url); cle = String(cle||'').trim();
+  if(!url && !cle){ SY.manuel = false; return; }
+  var memeUrl = !CFG_URL || url === normUrl(CFG_URL);
+  var memeCle = !CFG_KEY || cle === String(CFG_KEY).trim();
+  SY.manuel = !(memeUrl && memeCle);
 }
 
 function normUrl(u){
@@ -1162,6 +1214,47 @@ function normUrl(u){
     .replace(/\/+$/,'');             /* slash final */
 }
 function apiURL(chemin){ return normUrl(SY.url) + '/rest/v1/' + chemin; }
+/* Lecture de la clé sans contacter le serveur : une clé anon est un JWT
+   dont la charge utile indique le rôle et la date d'expiration. */
+function inspecterCle(k){
+  k = String(k||'').trim();
+  if(!k) return {type:'absente'};
+  if(/^sb_secret_|service_role/.test(k)) return {type:'secrete'};
+  if(/^sb_publishable_/.test(k)) return {type:'publiable'};
+  var m = k.split('.');
+  if(m.length!==3) return {type:'inconnue'};
+  try{
+    var b = m[1].replace(/-/g,'+').replace(/_/g,'/');
+    while(b.length%4) b += '=';
+    var p = JSON.parse(decodeURIComponent(escape(atob(b))));
+    return {type:'jwt', role:p.role||'', exp:p.exp||0, ref:p.ref||'',
+            expire: p.exp ? (p.exp*1000 < Date.now()) : false};
+  }catch(e){ return {type:'inconnue'}; }
+}
+
+/* Explication d'un refus d'authentification, en clair. */
+var _aide401Vue = false;
+function aide401(){
+  if(_aide401Vue) return 'M\u00eame refus que ci-dessus : c\u2019est bien la cl\u00e9 qui est en cause, pas les tables.';
+  _aide401Vue = true;
+  var i = inspecterCle(SY.key);
+  var t = 'La base refuse la cl\u00e9. Elle n\u2019est plus valable ou n\u2019est pas la bonne.<br><br>';
+  if(i.type==='secrete')
+    return t+'<strong>Cette cl\u00e9 est une cl\u00e9 secr\u00e8te</strong> (service_role). Elle ne doit jamais '+
+           'figurer dans l\u2019application. Remplacez-la par la cl\u00e9 publique.';
+  if(i.type==='absente') return t+'Aucune cl\u00e9 n\u2019est enregistr\u00e9e.';
+  if(i.type==='jwt' && i.expire)
+    return t+'<strong>Cette cl\u00e9 a expir\u00e9</strong> le '+new Date(i.exp*1000).toLocaleDateString('fr-FR')+'.';
+  return t+
+    '<strong>Dans Supabase \u2192 Settings \u2192 API Keys</strong>, comparez la cl\u00e9 affich\u00e9e avec celle '+
+    'enregistr\u00e9e ici. Deux cas tr\u00e8s fr\u00e9quents :<br>'+
+    '\u2022 la cl\u00e9 a \u00e9t\u00e9 <strong>r\u00e9g\u00e9n\u00e9r\u00e9e</strong> : l\u2019ancienne ne vaut plus rien, recopiez la nouvelle ;<br>'+
+    '\u2022 le projet est pass\u00e9 aux <strong>nouvelles cl\u00e9s</strong> : l\u2019ancienne cl\u00e9 <code>eyJ\u2026</code> est '+
+    'd\u00e9sactiv\u00e9e, prenez celle qui commence par <code>sb_publishable_</code>.<br><br>'+
+    'Collez-la dans R\u00e9glages, puis Enregistrer. '+
+    '<em>Pensez \u00e0 la mettre aussi sur les t\u00e9l\u00e9phones de vos collaborateurs.</em>';
+}
+
 function apiHead(extra){
   var h = {
     'apikey': SY.key,
@@ -4370,6 +4463,7 @@ function openCfg(){
   q('#cfg-cancel').onclick=closeModal;
   q('#cfg-export').onclick=exportData;
   q('#sy-test').onclick=async function(){
+    majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
     SY.url=normUrl(q('#sy-url').value);
     SY.key=q('#sy-key').value.trim();
     q('#sy-url').value=SY.url;   /* on montre l'adresse corrigée */
@@ -4392,11 +4486,7 @@ function openCfg(){
       if(r.ok){ await saveSync(); toast(true,'Connexion r\u00e9ussie.'); return; }
       var txt=''; try{ txt=await r.text(); }catch(e){}
       if(r.status===401||r.status===403){
-        diagSync('Cl\u00e9 refus\u00e9e ('+r.status+')',
-          'La cl\u00e9 n\u2019est pas accept\u00e9e. V\u00e9rifiez :<br>'+
-          '\u2022 avoir copi\u00e9 la cl\u00e9 <strong>enti\u00e8re</strong> (elle est tr\u00e8s longue)<br>'+
-          '\u2022 avoir pris la cl\u00e9 <strong>anon / publishable</strong>, pas <em>service_role</em><br>'+
-          '\u2022 aucun espace avant ou apr\u00e8s');
+        diagSync('Cl\u00e9 refus\u00e9e ('+r.status+')', aide401());
       } else if(r.status===404){
         diagSync('Tables introuvables (404)',
           'Le projet r\u00e9pond, mais la table <code>rapports</code> n\u2019existe pas.<br><br>'+
@@ -4430,13 +4520,15 @@ function openCfg(){
   if(biv) biv.onclick=function(){ closeModal(); fenetrePartage(); };
   var bdg=q('#sy-diag');
   if(bdg) bdg.onclick=async function(){
+    majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
     SY.url=normUrl(q('#sy-url').value); SY.key=q('#sy-key').value.trim();
     SY.user=q('#sy-user').value.trim(); SY.role=q('#sy-role').value;
     await saveSync();
     diagnostic();
   };
   q('#sy-now').onclick=async function(){
-    SY.url=q('#sy-url').value.trim(); SY.key=q('#sy-key').value.trim();
+    majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
+    SY.url=normUrl(q('#sy-url').value); SY.key=q('#sy-key').value.trim();
     SY.user=q('#sy-user').value.trim(); SY.role=q('#sy-role').value;
     await saveSync();
     closeModal();
@@ -4450,7 +4542,8 @@ function openCfg(){
     ST.cfg.suiviMail=q('#cfg-suivi-mail').value.trim();
     ST.cfg.suiteMail=q('#cfg-suite-mail').value.trim();
     ST.cfg.suiviAuto=q('#cfg-suivi-auto').checked;
-    SY.url=q('#sy-url').value.trim();
+    majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
+    SY.url=normUrl(q('#sy-url').value);
     SY.key=q('#sy-key').value.trim();
     SY.user=q('#sy-user').value.trim();
     SY.role=q('#sy-role').value;
