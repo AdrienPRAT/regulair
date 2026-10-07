@@ -790,7 +790,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-0955';
+var VERSION = '2026.10.07-1005';
 
 async function verifierMaj(silencieux){
   try{
@@ -3038,8 +3038,11 @@ function destSuivi(r){
   var c=clientDuRapport(r);
   if(c&&c.email) out.push(c.email.trim());
   else if(r.clientEmail) out.push(String(r.clientEmail).trim());
-  /* 2 - adresse interne, toujours en copie */
-  var interne=(ST.cfg.suiviMail||CO_MAIL||'').trim();
+  /* 2 - adresse interne : CO_MAIL systématiquement, plus celle des réglages.
+     Auparavant CO_MAIL ne servait que de remplacement, donc il disparaissait
+     dès qu'une autre adresse était renseignée. */
+  if(CO_MAIL) out.push(CO_MAIL.trim());
+  var interne=(ST.cfg.suiviMail||'').trim();
   if(interne) interne.split(/[;,\s]+/).forEach(function(a){ if(a) out.push(a); });
   /* 3 - adresse dédiée « Suite à donner » */
   var s=(ST.cfg.suiteMail||'').trim();
@@ -3160,7 +3163,11 @@ async function envoyerSuivi(r, blob, fname, destOverride){
 
 /* Fenêtre proposée après génération d'un PDF « Suite à donner » */
 function proposerSuivi(r, blob, fname){
-  var dest=(isSuite(r)&&(ST.cfg.suiteMail||'').trim()) ? ST.cfg.suiteMail.trim() : (ST.cfg.suiviMail||'').trim();
+  /* Les destinataires complets : e-mail du client issu du fichier clients,
+     notre adresse interne, et l'adresse « Suite à donner » le cas échéant.
+     Cette fenêtre lisait auparavant les réglages seuls, d'où un champ vide
+     alors que l'e-mail du client était connu. */
+  var dest = destSuivi(r);
   closeModal();
   q('#modal').innerHTML=
     '<div class="mbg" id="mbg"><div class="mbox sm">'+
@@ -3184,8 +3191,24 @@ function proposerSuivi(r, blob, fname){
   q('#suivi-skip').onclick=closeModal;
   q('#suivi-go').onclick=async function(){
     var v=q('#suivi-dest').value.trim();
-    if(q('#suivi-remember').checked && v && v!==ST.cfg.suiviMail){
-      ST.cfg.suiviMail=v; await sSet('cfg',ST.cfg);
+    /* « Mémoriser » ne doit retenir que l'adresse du client, rattachée à sa
+       fiche — pas la liste complète recopiée dans les réglages généraux. */
+    if(q('#suivi-remember').checked && v){
+      var cli = clientDuRapport(r);
+      var connues = {};
+      [CO_MAIL, ST.cfg.suiviMail, ST.cfg.suiteMail].forEach(function(a){
+        String(a||'').split(/[;,\s]+/).forEach(function(x){ if(x) connues[x.toLowerCase()]=1; });
+      });
+      var nouvelles = v.split(/[;,\s]+/).filter(function(x){ return x && !connues[x.toLowerCase()]; });
+      if(cli && nouvelles.length){
+        cli.email = nouvelles.join(', ');
+        cli.maj = Date.now();
+        await saveClients();
+        if(SY.on) pousserClient(cli);
+      } else if(!cli && nouvelles.length){
+        r.clientEmail = nouvelles.join(', ');   /* pas de fiche : on garde sur le rapport */
+        try{ await sSet('r:'+r.id, r); }catch(e){}
+      }
     }
     closeModal();
     envoyerSuivi(r,blob,fname,v);
