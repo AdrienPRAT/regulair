@@ -350,6 +350,8 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .dg-l.ok{background:#F1F8F3;}
 .dg-l.ko{background:#FDF1EA;}
 .dg-l.info{background:var(--bg);}
+.dg-l.att{background:#FEF6E7;}
+.dg-l.att .dg-ic{color:#B45309;}
 .dg-ic{font-weight:700;flex-shrink:0;width:14px;text-align:center;}
 .dg-l.ok .dg-ic{color:#1F6B36;}
 .dg-l.ko .dg-ic{color:var(--rust);}
@@ -788,7 +790,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.05-0817';
+var VERSION = '2026.10.07-0900';
 
 async function verifierMaj(silencieux){
   try{
@@ -972,7 +974,7 @@ async function diagnostic(){
     var el=q('#dg-liste');
     if(el) el.innerHTML = lignes.map(function(l){
       return '<div class="dg-l '+l.etat+'">'+
-        '<span class="dg-ic">'+(l.etat==='ok'?'\u2713':l.etat==='ko'?'\u2717':'\u2026')+'</span>'+
+        '<span class="dg-ic">'+(l.etat==='ok'?'\u2713':l.etat==='ko'?'\u2717':l.etat==='att'?'\u26a0':'\u2026')+'</span>'+
         '<span class="dg-tx"><strong>'+esc(l.titre)+'</strong>'+
         (l.detail?'<span>'+l.detail+'</span>':'')+'</span></div>';
     }).join('');
@@ -984,7 +986,14 @@ async function diagnostic(){
     return;
   }
   ajouter('ok','Configuration pr\u00e9sente', esc(normUrl(SY.url)));
-  ajouter('ok','Identit\u00e9', esc(SY.user||'(non renseign\u00e9)')+' \u2014 r\u00f4le : '+esc(SY.role||'technicien'));
+  if(SY.role==='bureau'){
+    ajouter('ok','Identit\u00e9', esc(SY.user||'(non renseign\u00e9)')+' \u2014 r\u00f4le Bureau : tous les rapports de l\u2019\u00e9quipe sont affich\u00e9s.');
+  }else{
+    ajouter('att','R\u00f4le Technicien',
+      esc(SY.user||'(non renseign\u00e9)')+' \u2014 la liste n\u2019affiche que les rapports \u00e0 ce nom. '+
+      'Les rapports de vos collaborateurs sont bien re\u00e7us mais masqu\u00e9s. '+
+      'Passez le r\u00f4le sur <strong>Bureau</strong> dans les R\u00e9glages pour les voir.');
+  }
 
   /* 2 — Contexte */
   if(location.protocol==='file:'){
@@ -1092,7 +1101,7 @@ async function diagnostic(){
     act.innerHTML =
       '<button class="btn ghost" id="dg-close2">Fermer</button>'+
       '<button class="btn amber" id="dg-force" style="flex:1;justify-content:center;">'+
-        icon('save',14)+' Tout envoyer maintenant</button>';
+        icon('save',14)+' Tout récupérer et tout renvoyer</button>';
     q('#dg-close2').onclick=closeModal;
     q('#dg-force').onclick=async function(){
       var b=q('#dg-force');
@@ -1107,6 +1116,10 @@ async function diagnostic(){
 
 /* ═══════════════════ SYNCHRONISATION CLOUD ═══════════════════ */
 var SY = {url:'', key:'', user:'', role:'technicien', last:0, on:false, busy:false};
+/* Marge de recouvrement : on relit toujours les 10 dernières minutes.
+   Deux appareils n'ont jamais exactement la même heure, et un rapport
+   transmis pendant qu'on synchronise ne doit pas tomber dans le vide. */
+var MARGE_SYNC = 600000;
 
 async function loadSync(){
   var s = await sGet('sync');
@@ -1217,7 +1230,10 @@ async function pousserRapport(r){
     site: r.site || '',
     statut: r.statut || '',
     dossier: r.dossier || 'attente',
-    maj: r.updatedAt || Date.now(),
+    /* Date d'ENVOI, et non de modification : c'est elle qui sert de repère
+       aux autres appareils. Un rapport rédigé hier et transmis aujourd'hui
+       doit être vu aujourd'hui. (La date de modification reste dans contenu.) */
+    maj: Date.now(),
     contenu: copie
   };
   var resp = await fetch(apiURL('rapports'), {
@@ -1274,7 +1290,7 @@ async function synchroniser(silencieux){
     /* 1 ─ Envoi des rapports modifiés depuis la dernière synchro */
     for(var i=0;i<ST.idx.length;i++){
       var e = ST.idx[i];
-      if((e.upd||0) <= SY.last) continue;
+      if((e.upd||0) <= (SY.last - MARGE_SYNC)) continue;
       var r = null;
       try{ r = await sGet('r:'+e.id); }catch(ex){}
       if(!r) continue;
@@ -1296,7 +1312,7 @@ async function synchroniser(silencieux){
 
     majProgres('R\u00e9ception', 0, 0);
     /* 3 ─ Réception des nouveautés */
-    var depuis = SY.last || 0;
+    var depuis = Math.max(0, (SY.last||0) - MARGE_SYNC);
     var rr = await fetch(apiURL('rapports?maj=gt.'+depuis+'&select=*'), {headers:apiHead()});
     if(rr.ok){
       var lignes = await rr.json();
@@ -1343,7 +1359,9 @@ async function synchroniser(silencieux){
     } else erreurs++;
 
     noter('Termin\u00e9', envoyes+' envoy\u00e9(s), '+recus+' re\u00e7u(s), '+erreurs+' erreur(s)');
-    SY.last = Date.now();
+    /* On n'avance le repère que si tout s'est bien passé : sinon ce qui
+       a échoué serait considéré comme traité et ne repartirait jamais. */
+    if(!erreurs) SY.last = Date.now();
     await saveSync();
     majBadgeSync(erreurs?'err':'ok');
     if(!silencieux){
@@ -4284,10 +4302,11 @@ function openCfg(){
     '<div class="fg" style="margin-bottom:10px;">'+
       '<div class="f"><label>Votre nom</label><input type="text" id="sy-user" value="'+esc(SY.user||s.tech||'')+'" placeholder="Adrien PRAT"></div>'+
       '<div class="f"><label>R\u00f4le</label><select id="sy-role">'+
-        '<option value="technicien"'+(SY.role!=='bureau'?' selected':'')+'>Technicien</option>'+
-        '<option value="bureau"'+(SY.role==='bureau'?' selected':'')+'>Bureau (voit tout)</option>'+
+        '<option value="technicien"'+(SY.role!=='bureau'?' selected':'')+'>Technicien \u2014 mes rapports</option>'+
+        '<option value="bureau"'+(SY.role==='bureau'?' selected':'')+'>Bureau \u2014 tous les rapports</option>'+
       '</select></div>'+
     '</div>'+
+    '<p class="cfg-hint" id="sy-role-aide" style="margin:-4px 0 10px;"></p>'+
     '<div class="f" style="margin-bottom:8px;"><label>Adresse du projet Supabase</label>'+
       '<input type="text" id="sy-url" value="'+esc(SY.url||'')+'" placeholder="https://xxxxx.supabase.co"></div>'+
     '<div class="f" style="margin-bottom:10px;"><label>Cl\u00e9 publique (anon)</label>'+
@@ -4373,6 +4392,17 @@ function openCfg(){
         'Adresse test\u00e9e :<br><code>'+esc(apiURL('rapports'))+'</code>');
     }
   };
+  /* Le rôle décide de ce qui est affiché : on le dit noir sur blanc. */
+  var selRole=q('#sy-role'), aideRole=q('#sy-role-aide');
+  function majAideRole(){
+    if(!aideRole||!selRole) return;
+    aideRole.innerHTML = (selRole.value==='bureau')
+      ? '✓ Vous voyez les rapports de toute l’équipe.'
+      : '<span style="color:var(--amber,#b45309);">⚠ En rôle Technicien, la liste n’affiche que les rapports '+
+        'à votre nom. Choisissez <strong>Bureau</strong> pour voir ceux de vos collaborateurs.</span>';
+  }
+  if(selRole){ selRole.onchange=majAideRole; majAideRole(); }
+
   var bmj=q('#cfg-maj');
   if(bmj) bmj.onclick=function(){ verifierMaj(false); };
   var biv=q('#sy-invit');
