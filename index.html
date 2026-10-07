@@ -790,7 +790,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-0920';
+var VERSION = '2026.10.07-0935';
 
 async function verifierMaj(silencieux){
   try{
@@ -981,6 +981,7 @@ async function diagnostic(){
   }
 
   _aide401Vue = false;
+  if(SY.url && SY.key) await assurerCle();
 
   /* 1 — Configuration */
   if(!SY.url || !SY.key){
@@ -1002,6 +1003,15 @@ async function diagnostic(){
     ajouter('ok','Cl\u00e9 publique (nouveau format)','sb_publishable_\u2026');
   else
     ajouter('att','Cl\u00e9 non reconnue','Ce n\u2019est ni une cl\u00e9 anon, ni une cl\u00e9 publiable. V\u00e9rifiez le copier-coller.');
+
+  /* Une clé anon porte le nom du projet auquel elle appartient : si ce nom
+     ne correspond pas à l'adresse, le refus est garanti. */
+  var _refUrl = (normUrl(SY.url).match(/^https?:\/\/([a-z0-9]+)\./i)||[])[1]||'';
+  if(_ic.type==='jwt' && _ic.ref && _refUrl && _ic.ref!==_refUrl)
+    ajouter('ko','Cl\u00e9 d\u2019un autre projet',
+      'L\u2019adresse d\u00e9signe le projet <code>'+esc(_refUrl)+'</code> mais la cl\u00e9 appartient \u00e0 '+
+      '<code>'+esc(_ic.ref)+'</code>. Prenez la cl\u00e9 du projet <code>'+esc(_refUrl)+'</code>, '+
+      'ou corrigez l\u2019adresse.');
   if(SY.role==='bureau'){
     ajouter('ok','Identit\u00e9', esc(SY.user||'(non renseign\u00e9)')+' \u2014 r\u00f4le Bureau : tous les rapports de l\u2019\u00e9quipe sont affich\u00e9s.');
   }else{
@@ -1148,7 +1158,11 @@ async function diagnostic(){
    ║  tous les appareils la reprendront automatiquement.               ║
    ╚══════════════════════════════════════════════════════════════════╝ */
 var CFG_URL = 'https://istqnoejijfhzthznqcd.supabase.co';
-var CFG_KEY = '';   /* \u2190 collez ici la cl\u00e9 publique (anon) entre les apostrophes */
+var CFG_KEY = 'sb_publishable_W-rDEVFtbz9-L094APfcRg_-AisyyO-';
+/* Clé de secours : Supabase accepte selon les projets l'ancien format
+   (eyJ...) ou le nouveau (sb_publishable_...). Si la clé ci-dessus est
+   refusée, l'application essaie celle-ci et retient celle qui marche. */
+var CFG_KEY_ALT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzdHFub2VqaWpmaHp0aHpucWNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3ODg0NDUsImV4cCI6MjEwNDM2NDQ0NX0.PyWuwzEoAjeq9OlZAnnRM_WMqpYEpW7u5qg9HXorDxw';
 
 var SY = {url:'', key:'', user:'', role:'technicien', last:0, on:false, busy:false};
 /* Marge de recouvrement : on relit toujours les 10 dernières minutes.
@@ -1251,6 +1265,7 @@ function aide401(){
     '\u2022 la cl\u00e9 a \u00e9t\u00e9 <strong>r\u00e9g\u00e9n\u00e9r\u00e9e</strong> : l\u2019ancienne ne vaut plus rien, recopiez la nouvelle ;<br>'+
     '\u2022 le projet est pass\u00e9 aux <strong>nouvelles cl\u00e9s</strong> : l\u2019ancienne cl\u00e9 <code>eyJ\u2026</code> est '+
     'd\u00e9sactiv\u00e9e, prenez celle qui commence par <code>sb_publishable_</code>.<br><br>'+
+    '\u2022 la cl\u00e9 vient d\u2019un <strong>autre projet</strong> Supabase que celui indiqu\u00e9 par l\u2019adresse.<br><br>'+
     'Collez-la dans R\u00e9glages, puis Enregistrer. '+
     '<em>Pensez \u00e0 la mettre aussi sur les t\u00e9l\u00e9phones de vos collaborateurs.</em>';
 }
@@ -1263,6 +1278,35 @@ function apiHead(extra){
   };
   if(extra) Object.keys(extra).forEach(function(k){ h[k]=extra[k]; });
   return h;
+}
+
+/* Une seule vérification par session : la clé configurée est-elle acceptée ?
+   Si non, on tente la clé de secours et on adopte celle qui répond. */
+var _cleVerifiee = false;
+async function assurerCle(){
+  if(_cleVerifiee || SY.manuel || !SY.url || !SY.key) return;
+  async function essai(k){
+    try{
+      var r = await fetch(apiURL('rapports?select=id&limit=1'), {
+        headers: {'apikey':k, 'Authorization':'Bearer '+k, 'Content-Type':'application/json'}
+      });
+      return r.ok;
+    }catch(e){ return null; }   /* null = réseau, on ne conclut rien */
+  }
+  var a = await essai(SY.key);
+  if(a === true){ _cleVerifiee = true; return; }
+  if(a === null) return;        /* hors ligne : on ne touche à rien */
+  var autres = [CFG_KEY, CFG_KEY_ALT].filter(function(k){
+    return k && String(k).trim() && k !== SY.key;
+  });
+  for(var i=0;i<autres.length;i++){
+    if(await essai(autres[i]) === true){
+      SY.key = autres[i];
+      _cleVerifiee = true;
+      await saveSync();
+      return;
+    }
+  }
 }
 
 /* ─── Photos : envoi vers le stockage ─── */
@@ -1393,6 +1437,7 @@ async function synchroniser(silencieux){
   }
   SY.busy = true;
   majBadgeSync('sync');
+  try{ await assurerCle(); }catch(e){}
   var envoyes=0, recus=0, erreurs=0;
   LOG=[]; noter('D\u00e9but', 'depuis '+(SY.last||0)+' \u2014 '+ST.idx.length+' rapport(s), '+CLIENTS.length+' client(s) en local');
   /* Fenêtre de progression pour les envois manuels */
@@ -4468,6 +4513,7 @@ function openCfg(){
     SY.key=q('#sy-key').value.trim();
     q('#sy-url').value=SY.url;   /* on montre l'adresse corrigée */
     if(!SY.url||!SY.key){ toast(false,'Renseignez l\u2019adresse et la cl\u00e9.'); return; }
+    try{ await assurerCle(); }catch(e){}
     if(!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(SY.url)){
       diagSync('Adresse inattendue','L\u2019adresse doit ressembler \u00e0 <code>https://xxxxx.supabase.co</code><br><br>Vous avez saisi :<br><code>'+esc(SY.url)+'</code>');
       return;
