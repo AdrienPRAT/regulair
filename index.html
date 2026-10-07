@@ -872,7 +872,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1115';
+var VERSION = '2026.10.07-1130';
 
 async function verifierMaj(silencieux){
   try{
@@ -2808,7 +2808,7 @@ async function calculerRegistre(annee){
       else f = canonFluide(f);
       var k = normFluide(f) || f;
       if(!par[k]) par[k] = {nom:f, n:0, chargee:0, vierge:0, recycle:0, regen:0,
-                            recup:0, traitement:0, reutilisation:0, co2:0, pgr:pgr(f)};
+                            recup:0, traitement:0, reutilisation:0, pgr:pgr(f)};
       var a = par[k];
       a.n++;
       a.chargee      += nbFr(c.chargee);
@@ -2818,7 +2818,6 @@ async function calculerRegistre(annee){
       a.recup        += nbFr(c.recup);
       a.traitement   += nbFr(c.traitement);
       a.reutilisation+= nbFr(c.reutilisation);
-      a.co2          += nbFr(c.chargee) * a.pgr / 1000;   /* tonnes eq. CO2 */
 
       var st = (r.site||'(sans site)').trim();
       if(!sites[st]) sites[st] = {site:st, n:0, chargee:0, recup:0};
@@ -2833,13 +2832,12 @@ async function calculerRegistre(annee){
   var lsites = Object.keys(sites).map(function(k){ return sites[k]; })
                 .sort(function(a,b){ return b.chargee - a.chargee; });
   var tot = {n:0, chargee:0, vierge:0, recycle:0, regen:0, recup:0,
-             traitement:0, reutilisation:0, co2:0};
+             traitement:0, reutilisation:0};
   liste.forEach(function(a){
     Object.keys(tot).forEach(function(c){ tot[c] += a[c]; });
   });
   return {annee:annee, fluides:liste, sites:lsites, total:tot,
-          nCerfa:nCerfa, nRapports:nRapports, sansFluide:sansFluide,
-          sansPGR: liste.filter(function(a){ return !a.pgr; }).map(function(a){ return a.nom; })};
+          nCerfa:nCerfa, nRapports:nRapports, sansFluide:sansFluide};
 }
 
 function kg(v){ return (Math.round(v*100)/100).toLocaleString('fr-FR'); }
@@ -2896,28 +2894,26 @@ async function renderRegistre(){
     '<div class="kpis">'+
       kpi(kg(t.chargee)+' kg','charg\u00e9s','amber')+
       kpi(kg(t.recup)+' kg','r\u00e9cup\u00e9r\u00e9s','vert')+
-      kpi(kg(t.co2)+' t','\u00e9q. CO\u2082 charg\u00e9','orange')+
-      kpi(R.nCerfa,'fiche'+(R.nCerfa>1?'s':'')+' CERFA','bleu')+
+      kpi(R.nCerfa,'fiche'+(R.nCerfa>1?'s':'')+' CERFA','orange')+
+      kpi(R.sites.length,'site'+(R.sites.length>1?'s':''),'bleu')+
     '</div>'+
 
     '<div class="tear">Par fluide</div>'+
     '<div class="rg-wrap"><table class="rg-t">'+
       '<thead><tr><th>Fluide</th><th>PRG</th><th>Fiches</th>'+
-      '<th>Charg\u00e9 (kg)</th><th>dont vierge</th><th>dont recycl\u00e9</th><th>dont r\u00e9g\u00e9n\u00e9r\u00e9</th>'+
+      '<th>Charg\u00e9 (kg)</th><th>dont vierge</th><th>dont recycl\u00e9, r\u00e9introduit</th><th>dont r\u00e9g\u00e9n\u00e9r\u00e9</th>'+
       '<th>R\u00e9cup\u00e9r\u00e9 (kg)</th><th>dont traitement</th><th>dont r\u00e9utilis\u00e9</th>'+
-      '<th>\u00e9q. CO\u2082 (t)</th></tr></thead><tbody>'+
+      '</tr></thead><tbody>'+
       R.fluides.map(function(a){
         return '<tr><td class="rg-nom">'+esc(a.nom)+'</td>'+
           '<td>'+(a.pgr||'<span class="rg-na" title="Fluide absent de la table des PRG">\u2014</span>')+'</td>'+
           '<td>'+a.n+'</td>'+
           '<td class="rg-f">'+kg(a.chargee)+'</td><td>'+kg(a.vierge)+'</td><td>'+kg(a.recycle)+'</td><td>'+kg(a.regen)+'</td>'+
-          '<td class="rg-f">'+kg(a.recup)+'</td><td>'+kg(a.traitement)+'</td><td>'+kg(a.reutilisation)+'</td>'+
-          '<td class="rg-f">'+kg(a.co2)+'</td></tr>';
+          '<td class="rg-f">'+kg(a.recup)+'</td><td>'+kg(a.traitement)+'</td><td>'+kg(a.reutilisation)+'</td></tr>';
       }).join('')+
       '<tr class="rg-tot"><td>Total</td><td></td><td>'+t.n+'</td>'+
         '<td>'+kg(t.chargee)+'</td><td>'+kg(t.vierge)+'</td><td>'+kg(t.recycle)+'</td><td>'+kg(t.regen)+'</td>'+
-        '<td>'+kg(t.recup)+'</td><td>'+kg(t.traitement)+'</td><td>'+kg(t.reutilisation)+'</td>'+
-        '<td>'+kg(t.co2)+'</td></tr>'+
+        '<td>'+kg(t.recup)+'</td><td>'+kg(t.traitement)+'</td><td>'+kg(t.reutilisation)+'</td></tr>'+
       '</tbody></table></div>'+
 
     '<div class="tear">Par site</div>'+
@@ -2930,13 +2926,9 @@ async function renderRegistre(){
       '</tbody></table></div>'+
 
     '<p class="cfg-hint" style="margin-top:14px;">'+
-      'Calcul\u00e9 sur '+R.nRapports+' rapport(s) comportant '+R.nCerfa+' fiche(s) CERFA. '+
-      'L\u2019\u00e9quivalent CO\u2082 est recalcul\u00e9 \u00e0 partir des quantit\u00e9s charg\u00e9es et du PRG du fluide : '+
-      'le tonnage inscrit sur un CERFA d\u00e9crit la charge de l\u2019\u00e9quipement, et l\u2019additionner '+
-      'compterait plusieurs fois le m\u00eame gaz.'+
-      (R.sansFluide ? '<br><strong>'+R.sansFluide+' fiche(s) sans d\u00e9nomination de fluide</strong>, regroup\u00e9es sous « non pr\u00e9cis\u00e9 ».' : '')+
-      (R.sansPGR.length ? '<br><strong>PRG inconnu</strong> pour : '+esc(R.sansPGR.join(', '))+
-        '. Leurs quantit\u00e9s sont compt\u00e9es, mais pas leur \u00e9quivalent CO\u2082.' : '')+
+      'Calcul\u00e9 sur '+R.nRapports+' rapport(s) comportant '+R.nCerfa+' fiche(s) CERFA.'+
+      (R.sansFluide ? '<br><strong>'+R.sansFluide+' fiche(s) sans d\u00e9nomination de fluide</strong>, '+
+        'regroup\u00e9es sous \u00ab non pr\u00e9cis\u00e9 \u00bb. Les nouvelles fiches exigent d\u00e9sormais ce champ.' : '')+
     '</p>';
 }
 
@@ -2945,16 +2937,16 @@ function exporterRegistre(R){
   L.push(['Registre des fluides', R.annee==='tout'?'toutes ann\u00e9es':R.annee].join(';'));
   L.push(['\u00c9dit\u00e9 le', new Date().toLocaleDateString('fr-FR'), CO_NAME].join(';'));
   L.push('');
-  L.push(['Fluide','PRG','Fiches','Charge totale (kg)','Vierge A (kg)','Recycl\u00e9 B (kg)','R\u00e9g\u00e9n\u00e9r\u00e9 C (kg)',
-          'R\u00e9cup\u00e9r\u00e9 (kg)','Traitement D (kg)','R\u00e9utilisation E (kg)','\u00e9q. CO2 charg\u00e9 (t)'].join(';'));
+  L.push(['Fluide','PRG','Fiches','Charge totale (kg)','Vierge A (kg)','Recycl\u00e9 r\u00e9introduit B (kg)','R\u00e9g\u00e9n\u00e9r\u00e9 C (kg)',
+          'R\u00e9cup\u00e9r\u00e9 (kg)','Traitement D (kg)','R\u00e9utilisation E (kg)'].join(';'));
   function v(n){ return String(Math.round(n*100)/100).replace('.',','); }
   R.fluides.forEach(function(a){
     L.push([a.nom, a.pgr||'', a.n, v(a.chargee), v(a.vierge), v(a.recycle), v(a.regen),
-            v(a.recup), v(a.traitement), v(a.reutilisation), v(a.co2)].join(';'));
+            v(a.recup), v(a.traitement), v(a.reutilisation)].join(';'));
   });
   var t=R.total;
   L.push(['TOTAL','',t.n,v(t.chargee),v(t.vierge),v(t.recycle),v(t.regen),
-          v(t.recup),v(t.traitement),v(t.reutilisation),v(t.co2)].join(';'));
+          v(t.recup),v(t.traitement),v(t.reutilisation)].join(';'));
   L.push('');
   L.push(['Site','Fiches','Charg\u00e9 (kg)','R\u00e9cup\u00e9r\u00e9 (kg)'].join(';'));
   R.sites.forEach(function(x){ L.push([x.site, x.n, v(x.chargee), v(x.recup)].join(';')); });
@@ -4558,7 +4550,7 @@ function panelCerfa(r){
       '<div class="tear">[1] Op\u00e9rateur / [2] D\u00e9tenteur</div>'+
       '<div class="fg">'+ftaC('Op\u00e9rateur (nom, adresse, SIRET)','op',c.op||CERFA_OP,3)+ftaC('D\u00e9tenteur (nom et adresse)','det',c.det,3)+'</div>'+
       '<div class="tear">[3] \u00c9quipement concern\u00e9</div>'+
-      '<div class="fg">'+fldC('\u00c9quipement (id.)','equipIdent',c.equipIdent,{full:true,ph:'Marque, mod\u00e8le, n\u00b0 de s\u00e9rie'})+fldC('Fluide','fluideDenom',c.fluideDenom,{ph:'R-410A'})+fldC('Charge totale kg','chargeTot',c.chargeTot)+fldC('Tonnage \u00e9q. CO2','tonnCO2',c.tonnCO2)+'</div>'+
+      '<div class="fg">'+fldC('\u00c9quipement (id.)','equipIdent',c.equipIdent,{full:true,ph:'Marque, mod\u00e8le, n\u00b0 de s\u00e9rie'})+fldC('Fluide (obligatoire)','fluideDenom',c.fluideDenom,{ph:'R-410A'})+fldC('Charge totale kg','chargeTot',c.chargeTot)+fldC('Tonnage \u00e9q. CO2','tonnCO2',c.tonnCO2)+'</div>'+
       '<div class="tear">[4] Nature de l\u2019intervention</div>'+
       '<div class="cl-cols"><div class="cl-col">'+
         cchk("Assemblage de l\u2019\u00e9quipement",P+'nature.assemblage',!!nat.assemblage)+
@@ -4667,13 +4659,25 @@ function validatePdf(r){
   if(!r.dateDebut)m.push({t:'info',l:'Jour de d\u00e9but'});
   if(!r.sigTech)m.push({t:'sig',l:'Signature du technicien'});
   if(!r.sigClient)m.push({t:'sig',l:'Signature du client'});
+  /* Une fiche CERFA sans fluide nomm\u00e9 n'a aucune valeur : ni registre,
+     ni tra\u00e7abilit\u00e9 r\u00e9glementaire. On bloque la g\u00e9n\u00e9ration. */
+  cerfasActives(r).forEach(function(c, i){
+    if(!String(c.fluideDenom||'').trim())
+      m.push({t:'cerfa', l:'D\u00e9nomination du fluide'+(cerfasActives(r).length>1?' (fiche '+(i+1)+')':''),
+              cerfa:(r.cerfas||[]).indexOf(c)});
+  });
   return m;
 }
 
 async function handlePdf(){
   var r=ST.cur;
   var miss=validatePdf(r);
-  if(miss.length){goTab(miss[0].t);toast(false,'Manquant : '+miss.map(function(m){return m.l;}).join(', ')+'.');return;}
+  if(miss.length){
+    if(typeof miss[0].cerfa==='number' && miss[0].cerfa>=0) r.cerfaIdx=miss[0].cerfa;
+    goTab(miss[0].t);
+    toast(false,'Manquant : '+miss.map(function(m){return m.l;}).join(', ')+'.');
+    return;
+  }
   if(!window.jspdf){ toast(true,'Pr\u00e9paration du PDF\u2026'); var okLib=await ensureLib(); if(!okLib){toast(false,'Biblioth\u00e8que PDF indisponible. Connectez-vous une fois \u00e0 Internet.');return;} }
   await save(false);
   if(SY.on) { try{ await completerPhotos(r); }catch(e){} }
