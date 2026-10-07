@@ -790,7 +790,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-0900';
+var VERSION = '2026.10.07-0905';
 
 async function verifierMaj(silencieux){
   try{
@@ -1121,6 +1121,25 @@ var SY = {url:'', key:'', user:'', role:'technicien', last:0, on:false, busy:fal
    transmis pendant qu'on synchronise ne doit pas tomber dans le vide. */
 var MARGE_SYNC = 600000;
 
+/* Supabase plafonne chaque réponse à 1000 lignes, sans le dire.
+   On lit donc par tranches jusqu'à épuisement : au-delà du millier de
+   rapports, rien ne doit disparaître en silence. */
+async function lireTout(chemin){
+  var TRANCHE = 500, debut = 0, tout = [];
+  for(var garde=0; garde<200; garde++){
+    var resp = await fetch(apiURL(chemin), {
+      headers: apiHead({'Range-Unit':'items', 'Range':debut+'-'+(debut+TRANCHE-1)})
+    });
+    if(!resp.ok && resp.status!==206) throw new Error('HTTP '+resp.status);
+    var lot = await resp.json();
+    if(!Array.isArray(lot)) throw new Error('réponse inattendue');
+    tout = tout.concat(lot);
+    if(lot.length < TRANCHE) break;
+    debut += TRANCHE;
+  }
+  return tout;
+}
+
 async function loadSync(){
   var s = await sGet('sync');
   if(s) SY = Object.assign(SY, s);
@@ -1313,9 +1332,10 @@ async function synchroniser(silencieux){
     majProgres('R\u00e9ception', 0, 0);
     /* 3 ─ Réception des nouveautés */
     var depuis = Math.max(0, (SY.last||0) - MARGE_SYNC);
-    var rr = await fetch(apiURL('rapports?maj=gt.'+depuis+'&select=*'), {headers:apiHead()});
-    if(rr.ok){
-      var lignes = await rr.json();
+    var lignes = null;
+    try{ lignes = await lireTout('rapports?maj=gt.'+depuis+'&select=*&order=maj.asc'); }
+    catch(ex){ noter('R\u00e9ception rapports','\u00c9CHEC '+(ex&&ex.message||ex)); erreurs++; }
+    if(lignes){
       noter('R\u00e9ception rapports', lignes.length+' ligne(s)');
       for(var k=0;k<lignes.length;k++){
         var L = lignes[k];
@@ -1341,12 +1361,13 @@ async function synchroniser(silencieux){
         recus++;
       }
       await sSet('idx', ST.idx);
-    } else { noter('R\u00e9ception rapports','\u00c9CHEC '+rr.status); erreurs++; }
+    }
 
     /* 4 ─ Réception des clients */
-    var rc = await fetch(apiURL('clients?maj=gt.'+depuis+'&select=*'), {headers:apiHead()});
-    if(rc.ok){
-      var lc = await rc.json();
+    var lc = null;
+    try{ lc = await lireTout('clients?maj=gt.'+depuis+'&select=*&order=maj.asc'); }
+    catch(ex){ noter('R\u00e9ception clients','\u00c9CHEC '+(ex&&ex.message||ex)); erreurs++; }
+    if(lc){
       noter('R\u00e9ception clients', lc.length+' ligne(s)');
       lc.forEach(function(L){
         var d = L.contenu;
@@ -1356,7 +1377,7 @@ async function synchroniser(silencieux){
         recus++;
       });
       await saveClients();
-    } else erreurs++;
+    }
 
     noter('Termin\u00e9', envoyes+' envoy\u00e9(s), '+recus+' re\u00e7u(s), '+erreurs+' erreur(s)');
     /* On n'avance le repère que si tout s'est bien passé : sinon ce qui
