@@ -626,7 +626,7 @@ function defRapport(ref){
     typesI:[],statut:'R\u00e9solu',baseTemps:'reel',
     tempType:'soufflage',tempVal:'',
     clN:{},clC:{},
-    descriptif:'',fournitures:'',obsClient:'',
+    descriptif:'',travaux:'',fournitures:'',obsClient:'',
     photos:[],sigTech:null,sigClient:null,nomClient:'',
     cerfas:[defCerfa()], cerfaIdx:0,
     dossier:'attente', mailEnvoye:false, mailDate:null, mailDest:'',
@@ -910,7 +910,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1155';
+var VERSION = '2026.10.07-1300';
 
 async function verifierMaj(silencieux){
   try{
@@ -2647,7 +2647,8 @@ async function apercuHisto(id){
     '<div class="mbg" id="mbg"><div class="mbox sm">'+
       '<h3>'+esc(r.ref||'')+'</h3>'+
       '<p class="cfg-hint">'+fmtRange(r)+(r.intervenant?' \u2014 '+esc(r.intervenant):'')+'</p>'+
-      (r.descriptif?'<div class="histo-bloc"><label>Travaux</label><p>'+esc(r.descriptif)+'</p></div>':'')+
+      (r.descriptif?'<div class="histo-bloc"><label>Travaux r\u00e9alis\u00e9s</label><p>'+esc(r.descriptif)+'</p></div>':'')+
+      (r.travaux?'<div class="histo-bloc"><label>Travaux \u00e0 r\u00e9aliser</label><p>'+esc(r.travaux)+'</p></div>':'')+
       (r.fournitures?'<div class="histo-bloc"><label>Fournitures</label><p>'+esc(r.fournitures)+'</p></div>':'')+
       (r.obsClient?'<div class="histo-bloc"><label>Observations client</label><p>'+esc(r.obsClient)+'</p></div>':'')+
       '<div class="mact">'+
@@ -3490,6 +3491,7 @@ function corpsSuivi(r){
   if(r.typesI&&r.typesI.length) t+='Type : '+r.typesI.join(', ')+'\n';
   t+='Statut : '+(r.statut||'')+'\n';
   t+='\n--- Travaux r\u00e9alis\u00e9s ---\n'+((r.descriptif||'').trim()||'(non renseign\u00e9)')+'\n';
+  if((r.travaux||'').trim()) t+='\n--- Travaux \u00e0 r\u00e9aliser ---\n'+r.travaux.trim()+'\n';
   if(r.fournitures&&r.fournitures.trim()) t+='\n--- Fournitures ---\n'+r.fournitures.trim()+'\n';
   if(r.obsClient&&r.obsClient.trim())     t+='\n--- Observations client ---\n'+r.obsClient.trim()+'\n';
   t+='\nLe rapport complet est joint.\n\n'+(r.intervenant||ST.cfg.tech||CO_NAME);
@@ -4014,7 +4016,13 @@ function renderList(){
 function renderCards(){
   var cont=q('#cards');
   var t=ST.search.trim().toLowerCase();
-  var list=ST.idx.filter(visibleParMoi).sort(function(a,b){return(b.upd||0)-(a.upd||0);});
+  /* Tri sur la date d'intervention, et non sur la date de modification :
+     rouvrir un vieux rapport ne doit pas le faire remonter en tête. */
+  var list=ST.idx.filter(visibleParMoi).sort(function(a,b){
+    var da=a.dateDebut||'', db=b.dateDebut||'';
+    if(da!==db) return db.localeCompare(da);
+    return (b.upd||0)-(a.upd||0);
+  });
   if(ST.filtre) list=list.filter(function(r){ return passeFiltre(r, ST.filtre); });
   if(t) list=list.filter(function(r){return(r.ref||'').toLowerCase().includes(t)||(r.site||'').toLowerCase().includes(t);});
   if(!list.length){
@@ -4121,7 +4129,7 @@ async function dupRapport(id){
   var c=JSON.parse(JSON.stringify(r));
   c.id=uid();c.ref=ref;c.dateDebut=today();c.dateFin=today();
   c.heureDebut='';c.heureFin='';c.statut='R\u00e9solu';
-  c.clN={};c.clC={};c.tempVal='';c.descriptif='';c.fournitures='';c.obsClient='';
+  c.clN={};c.clC={};c.tempVal='';c.descriptif='';c.travaux='';c.fournitures='';c.obsClient='';
   c.photos=[];c.sigTech=null;c.sigClient=null;c.nomClient='';
   c.cerfas=[defCerfa()];c.cerfaIdx=0;delete c.cerfa;c.createdAt=Date.now();c.updatedAt=Date.now();
   ST.cur=c;ST.tab='info';ST.view='form';renderApp();
@@ -4483,6 +4491,9 @@ function panelInterv(r){
     '<h3 class="stitle">Intervention</h3>'+
     '<div class="fg">'+fta("Descriptif de l'intervention",'descriptif',r.descriptif,7)+'</div>'+
     outilsTexte('descriptif')+
+    '<div class="tear">Travaux \u00e0 r\u00e9aliser</div>'+
+    '<div class="fg">'+fta('Travaux \u00e0 r\u00e9aliser','travaux',r.travaux,4)+'</div>'+
+    outilsTexte('travaux')+
     '<div class="tear">Fournitures utilis\u00e9es</div>'+
     '<div class="fg">'+fta('Fournitures utilis\u00e9es','fournitures',r.fournitures,4)+'</div>'+
     outilsTexte('fournitures')+
@@ -4830,7 +4841,13 @@ function buildPdf(report){
     doc.text(report.ref||'',M,PH-5.5);
     doc.text('p.'+pn,PW-M,PH-5.5,{align:'right'});
   }
-  function np(){foot();doc.addPage();y=M;}
+  function np(){
+    /* foot() écrit en 6,5 pt gris : sans cette sauvegarde, un paragraphe
+       coupé par un saut de page reprenait dans la police du pied de page. */
+    var f=doc.getFont(), sz=doc.getFontSize(), col=doc.getTextColor();
+    foot(); doc.addPage(); y=M;
+    try{ doc.setFont(f.fontName, f.fontStyle); doc.setFontSize(sz); doc.setTextColor(col); }catch(e){}
+  }
   function need(h){if(y+h>PH-M-12)np();}
   function sec(lbl){
     need(12);doc.setFont('helvetica','bold');doc.setFontSize(10.5);doc.setTextColor(32,38,42);
@@ -4907,6 +4924,7 @@ function buildPdf(report){
 
   /* ── Intervention ── */
   sec("Descriptif de l'intervention");para(report.descriptif);
+  if(report.travaux&&report.travaux.trim()){sec('Travaux \u00e0 r\u00e9aliser');para(report.travaux);}
   if(report.fournitures&&report.fournitures.trim()){sec('Fournitures utilis\u00e9es');para(report.fournitures);}
   if(report.obsClient&&report.obsClient.trim()){sec('Observations client');para(report.obsClient);}
 
