@@ -204,6 +204,47 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .dz-hint{font-size:12px;color:var(--soft);margin:8px 0 0;font-style:italic;}
 .btn.sm[disabled]{opacity:.45;cursor:not-allowed;}
 .cflags{display:flex;gap:6px;flex-wrap:wrap;margin:-2px 0 2px;}
+/* Actions du tableau de bord */
+.st-actions{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;}
+.st-actions .btn{flex:1 1 200px;justify-content:center;}
+
+/* Registre des fluides */
+.rg-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);
+  border-radius:10px;background:#fff;margin-bottom:4px;}
+.rg-t{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap;}
+.rg-t th,.rg-t td{padding:8px 11px;text-align:right;border-bottom:1px solid var(--line);}
+.rg-t th{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+  color:var(--soft);background:var(--bg);position:sticky;top:0;}
+.rg-t th:first-child,.rg-t td:first-child{text-align:left;}
+.rg-t td.rg-nom{font-weight:600;color:var(--ink);white-space:normal;min-width:130px;}
+.rg-t td.rg-f{font-weight:700;color:var(--ink);}
+.rg-t tr:last-child td{border-bottom:0;}
+.rg-t tr.rg-tot td{background:var(--bg);font-weight:700;color:var(--ink);}
+.rg-na{color:var(--soft);cursor:help;}
+
+/* Rappel de sauvegarde */
+.sauv-bar{display:flex;align-items:center;gap:12px;background:#FCF7E8;border:1.5px solid #E0D2A8;
+  border-radius:10px;padding:11px 14px;margin:0 0 12px;font-size:13.5px;color:#7A5F16;}
+.sv-tx{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;}
+.sv-tx strong{font-size:13.5px;}
+.sv-tx span{font-size:12px;opacity:.85;}
+.sv-x{background:transparent;border:0;color:#7A5F16;font-size:20px;line-height:1;cursor:pointer;
+  padding:0 2px;opacity:.6;}
+.sv-x:hover{opacity:1;}
+@media(max-width:520px){ .sauv-bar{flex-wrap:wrap;} .sv-tx{flex:1 0 100%;} }
+
+/* Barre de filtres de l'accueil */
+.fbar{display:flex;gap:7px;overflow-x:auto;padding:0 0 12px;margin:-4px 0 0;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+.fbar::-webkit-scrollbar{display:none;}
+.fchip{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  font:inherit;font-size:12.5px;font-weight:600;color:var(--soft);
+  background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 13px;
+  white-space:nowrap;transition:background .12s,border-color .12s,color .12s;}
+.fchip:hover{border-color:var(--soft);color:var(--ink);}
+.fchip.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+.fchip .fn{display:inline-block;min-width:17px;text-align:center;font-size:11px;font-weight:700;
+  background:var(--bg);color:var(--soft);border-radius:999px;padding:1px 5px;}
+.fchip.on .fn{background:rgba(255,255,255,.22);color:#fff;}
 .flag{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:4px;letter-spacing:.02em;}
 .flag.clos{background:#E4F3E8;color:#1F6B36;}
 .flag.wait{background:#FCF3E2;color:#8A6A1F;}
@@ -492,6 +533,31 @@ function calcCO2(denom,chargeTot){
   return String(Math.round(kg*gwp/10)/100);
 }
 var STATUTS=['R\u00e9solu','Suite \u00e0 donner'];
+/* Filtres de l'accueil. « quoi » dit sur quel champ porte le tri :
+   env = rapport pas encore transmis, clo = transmis mais dossier ouvert. */
+var FILTRES=[
+  {k:'',      l:'Tous'},
+  {k:'env',   l:'\u00c0 envoyer'},
+  {k:'clo',   l:'\u00c0 cl\u00f4turer'},
+  {k:'suite', l:'Suite \u00e0 donner'},
+  {k:'reso',  l:'R\u00e9solu'},
+  {k:'fini',  l:'Cl\u00f4tur\u00e9'}
+];
+function passeFiltre(e, k){
+  var clos = (e.dossier||'attente')==='cloture';
+  var suite = (e.statut||'').indexOf('Suite')===0;
+  switch(k){
+    case 'env':   return !clos && !e.mailEnvoye;
+    case 'clo':   return !clos && !!e.mailEnvoye;
+    case 'suite': return suite && !clos;
+    case 'reso':  return !suite;
+    case 'fini':  return clos;
+    default:      return true;
+  }
+}
+function compteFiltre(k){
+  return ST.idx.filter(visibleParMoi).filter(function(e){ return passeFiltre(e,k); }).length;
+}
 var TYPESI=['D\u00e9pannage','Visite de maintenance','Visite technique'];
 var NET=[
   {k:'filtres',l:'Nettoyage des filtres'},{k:'unites',l:'Nettoyage des unit\u00e9s'},
@@ -509,7 +575,7 @@ var CTR=[
 ];
 
 /* ===== ÉTAT ===== */
-var ST={view:'list',idx:[],cur:null,tab:'info',cfg:{},search:''};
+var ST={view:'list',idx:[],cur:null,tab:'info',cfg:{},search:'',filtre:''};
 var PADS={};
 
 /* ===== MODÈLE RAPPORT ===== */
@@ -728,7 +794,6 @@ function diagSync(titre, msg){
       '<div class="diag-txt">'+msg+'</div>'+
       '<div class="mact"><button class="btn amber" id="dg-ok">Compris</button></div>'+
     '</div></div>';
-  q('#dbg').onclick=function(e){ if(e.target.id==='dbg') closeModal(); };
   q('#dg-ok').onclick=closeModal;
 }
 
@@ -790,7 +855,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1005';
+var VERSION = '2026.10.07-1045';
 
 async function verifierMaj(silencieux){
   try{
@@ -1119,6 +1184,17 @@ async function diagnostic(){
   /* 8 — Date de dernière synchro */
   ajouter('info','Derni\u00e8re synchronisation',
     SY.last ? new Date(SY.last).toLocaleString('fr-FR') : 'jamais');
+
+  /* Références en double : vestiges du compteur local d'avant correction. */
+  var dbl = refsEnDouble();
+  if(dbl.length)
+    ajouter('att','Références en double',
+      dbl.length+' référence(s) portée(s) par plusieurs rapports : '+
+      esc(dbl.slice(0,6).map(function(d){ return d.ref+' (×'+d.n+')'; }).join(', '))+
+      (dbl.length>6?'…':'')+'. Les nouveaux rapports portent désormais vos initiales '+
+      'et ne peuvent plus se télescoper. Renumérotez ces anciens à la main si besoin.');
+  else
+    ajouter('ok','Références','Aucun doublon.');
 
   /* Journal du dernier échange */
   await chargerLog();
@@ -1570,6 +1646,10 @@ function majBadgeSync(etat){
               : etat==='err'  ? '\u26a0'
               : etat==='ok'   ? '\u2713' : '\u25cb';
 }
+
+/* Le registre des fluides et l'export de facturation relèvent du bureau.
+   Hors synchronisation, l'application est mono-poste : pas de rôle à faire valoir. */
+function estBureau(){ return !SY.on || SY.role==='bureau'; }
 
 /* Le bureau voit tout, un technicien ne voit que ses rapports */
 function visibleParMoi(e){
@@ -2651,6 +2731,235 @@ function calculerStats(periode){
           nClos:nClos, nAttente:nAttente, nSuite:nSuite, nEnvoye:nEnvoye, sel:sel};
 }
 
+/* ═══════════ REGISTRE ANNUEL DES FLUIDES ═══════════
+   Agrège les CERFA de tous les rapports d'une année.
+   Attention : le « tonnage CO2 » d'un CERFA décrit la charge de
+   l'équipement visité, pas la quantité manipulée. L'additionner sur
+   plusieurs passages au même endroit compterait deux fois le même gaz.
+   Le registre recalcule donc l'équivalent CO2 à partir des quantités
+   réellement chargées, seule grandeur additionnable. */
+
+function nbFr(v){
+  var n = parseFloat(String(v==null?'':v).replace(',','.'));
+  return isNaN(n) ? 0 : n;
+}
+function normFluide(x){ return String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+
+/* Nom officiel du fluide quand on le reconnaît, sinon la saisie telle quelle.
+   Sans cela « R-410A » et « R410A » formeraient deux lignes pour un même gaz. */
+function canonFluide(denom){
+  var k = normFluide(denom), trouve = null;
+  Object.keys(GWP).forEach(function(n){
+    var nn = normFluide(n);
+    if(k===nn || 'R'+k===nn || k==='R'+nn) trouve = n;
+  });
+  return trouve || String(denom||'').trim();
+}
+function pgr(denom){
+  var n = canonFluide(denom);
+  return GWP[n] || 0;
+}
+function anneeRapport(r){
+  var d = r.dateDebut || r.dateFin || '';
+  var a = String(d).slice(0,4);
+  if(/^\d{4}$/.test(a)) return a;
+  return String(new Date(r.updatedAt||Date.now()).getFullYear());
+}
+
+async function calculerRegistre(annee){
+  var par = {};          /* par fluide */
+  var sites = {};        /* par site, pour le détail */
+  var nCerfa = 0, nRapports = 0, sansFluide = 0;
+
+  for(var i=0;i<ST.idx.length;i++){
+    var e = ST.idx[i];
+    if(!visibleParMoi(e)) continue;
+    var r = null;
+    try{ r = await sGet('r:'+e.id); }catch(ex){}
+    if(!r) continue;
+    if(annee !== 'tout' && anneeRapport(r) !== String(annee)) continue;
+
+    migreCerfas(r);
+    var actifs = (r.cerfas||[]).filter(function(c){ return c && c.active; });
+    if(!actifs.length) continue;
+    nRapports++;
+
+    actifs.forEach(function(c){
+      nCerfa++;
+      var f = (c.fluideDenom||'').trim();
+      if(!f){ sansFluide++; f = '(non pr\u00e9cis\u00e9)'; }
+      else f = canonFluide(f);
+      var k = normFluide(f) || f;
+      if(!par[k]) par[k] = {nom:f, n:0, chargee:0, vierge:0, recycle:0, regen:0,
+                            recup:0, traitement:0, reutilisation:0, co2:0, pgr:pgr(f)};
+      var a = par[k];
+      a.n++;
+      a.chargee      += nbFr(c.chargee);
+      a.vierge       += nbFr(c.vierge);
+      a.recycle      += nbFr(c.recycle);
+      a.regen        += nbFr(c.regen);
+      a.recup        += nbFr(c.recup);
+      a.traitement   += nbFr(c.traitement);
+      a.reutilisation+= nbFr(c.reutilisation);
+      a.co2          += nbFr(c.chargee) * a.pgr / 1000;   /* tonnes eq. CO2 */
+
+      var st = (r.site||'(sans site)').trim();
+      if(!sites[st]) sites[st] = {site:st, n:0, chargee:0, recup:0};
+      sites[st].n++;
+      sites[st].chargee += nbFr(c.chargee);
+      sites[st].recup   += nbFr(c.recup);
+    });
+  }
+
+  var liste = Object.keys(par).map(function(k){ return par[k]; })
+                .sort(function(a,b){ return b.chargee - a.chargee; });
+  var lsites = Object.keys(sites).map(function(k){ return sites[k]; })
+                .sort(function(a,b){ return b.chargee - a.chargee; });
+  var tot = {n:0, chargee:0, vierge:0, recycle:0, regen:0, recup:0,
+             traitement:0, reutilisation:0, co2:0};
+  liste.forEach(function(a){
+    Object.keys(tot).forEach(function(c){ tot[c] += a[c]; });
+  });
+  return {annee:annee, fluides:liste, sites:lsites, total:tot,
+          nCerfa:nCerfa, nRapports:nRapports, sansFluide:sansFluide,
+          sansPGR: liste.filter(function(a){ return !a.pgr; }).map(function(a){ return a.nom; })};
+}
+
+function kg(v){ return (Math.round(v*100)/100).toLocaleString('fr-FR'); }
+
+function anneesDisponibles(){
+  var a = {};
+  ST.idx.forEach(function(e){
+    var d = e.dateDebut || e.dateFin || '';
+    var y = String(d).slice(0,4);
+    if(/^\d{4}$/.test(y)) a[y]=1;
+  });
+  var l = Object.keys(a).sort().reverse();
+  if(!l.length) l = [String(new Date().getFullYear())];
+  return l;
+}
+
+async function renderRegistre(){
+  var an = ST.regAnnee || anneesDisponibles()[0];
+  ST.regAnnee = an;
+  q('#app').innerHTML =
+    '<div class="bar">'+
+      '<button class="icon-btn" id="rg-back">'+icon('back')+'</button>'+
+      '<div class="brand"><img src="'+LOGO_B64+'" alt="" style="height:28px;margin-right:8px;">Registre des fluides</div>'+
+      '<div class="spacer"></div>'+
+      '<button class="btn ghost" id="rg-csv">'+icon('save',15)+' Exporter</button>'+
+    '</div>'+
+    '<div class="page">'+
+      '<div class="per-tabs">'+
+        anneesDisponibles().concat(['tout']).map(function(y){
+          return '<button class="per-btn'+(String(y)===String(an)?' active':'')+'" data-an="'+y+'">'+
+                 (y==='tout'?'Toutes ann\u00e9es':y)+'</button>';
+        }).join('')+
+      '</div>'+
+      '<div id="rg-corps"><p class="cfg-hint">Calcul en cours\u2026</p></div>'+
+    '</div>';
+  q('#rg-back').onclick=function(){ ST.view='list'; renderApp(); };
+  qa('.per-btn').forEach(function(b){
+    b.onclick=function(){ ST.regAnnee=b.getAttribute('data-an'); renderRegistre(); };
+  });
+
+  var R = await calculerRegistre(an);
+  ST.regDernier = R;
+  q('#rg-csv').onclick=function(){ exporterRegistre(R); };
+
+  if(!R.fluides.length){
+    q('#rg-corps').innerHTML =
+      '<div class="empty"><h3>Aucune fiche fluide</h3>'+
+      '<p>Les rapports de cette p\u00e9riode ne comportent pas de CERFA actif.</p></div>';
+    return;
+  }
+
+  var t = R.total;
+  q('#rg-corps').innerHTML =
+    '<div class="kpis">'+
+      kpi(kg(t.chargee)+' kg','charg\u00e9s','amber')+
+      kpi(kg(t.recup)+' kg','r\u00e9cup\u00e9r\u00e9s','vert')+
+      kpi(kg(t.co2)+' t','\u00e9q. CO\u2082 charg\u00e9','orange')+
+      kpi(R.nCerfa,'fiche'+(R.nCerfa>1?'s':'')+' CERFA','bleu')+
+    '</div>'+
+
+    '<div class="tear">Par fluide</div>'+
+    '<div class="rg-wrap"><table class="rg-t">'+
+      '<thead><tr><th>Fluide</th><th>PRG</th><th>Fiches</th>'+
+      '<th>Charg\u00e9 (kg)</th><th>dont vierge</th><th>dont recycl\u00e9</th><th>dont r\u00e9g\u00e9n\u00e9r\u00e9</th>'+
+      '<th>R\u00e9cup\u00e9r\u00e9 (kg)</th><th>dont traitement</th><th>dont r\u00e9utilis\u00e9</th>'+
+      '<th>\u00e9q. CO\u2082 (t)</th></tr></thead><tbody>'+
+      R.fluides.map(function(a){
+        return '<tr><td class="rg-nom">'+esc(a.nom)+'</td>'+
+          '<td>'+(a.pgr||'<span class="rg-na" title="Fluide absent de la table des PRG">\u2014</span>')+'</td>'+
+          '<td>'+a.n+'</td>'+
+          '<td class="rg-f">'+kg(a.chargee)+'</td><td>'+kg(a.vierge)+'</td><td>'+kg(a.recycle)+'</td><td>'+kg(a.regen)+'</td>'+
+          '<td class="rg-f">'+kg(a.recup)+'</td><td>'+kg(a.traitement)+'</td><td>'+kg(a.reutilisation)+'</td>'+
+          '<td class="rg-f">'+kg(a.co2)+'</td></tr>';
+      }).join('')+
+      '<tr class="rg-tot"><td>Total</td><td></td><td>'+t.n+'</td>'+
+        '<td>'+kg(t.chargee)+'</td><td>'+kg(t.vierge)+'</td><td>'+kg(t.recycle)+'</td><td>'+kg(t.regen)+'</td>'+
+        '<td>'+kg(t.recup)+'</td><td>'+kg(t.traitement)+'</td><td>'+kg(t.reutilisation)+'</td>'+
+        '<td>'+kg(t.co2)+'</td></tr>'+
+      '</tbody></table></div>'+
+
+    '<div class="tear">Par site</div>'+
+    '<div class="rg-wrap"><table class="rg-t">'+
+      '<thead><tr><th>Site</th><th>Fiches</th><th>Charg\u00e9 (kg)</th><th>R\u00e9cup\u00e9r\u00e9 (kg)</th></tr></thead><tbody>'+
+      R.sites.map(function(x){
+        return '<tr><td class="rg-nom">'+esc(x.site)+'</td><td>'+x.n+'</td>'+
+               '<td class="rg-f">'+kg(x.chargee)+'</td><td class="rg-f">'+kg(x.recup)+'</td></tr>';
+      }).join('')+
+      '</tbody></table></div>'+
+
+    '<p class="cfg-hint" style="margin-top:14px;">'+
+      'Calcul\u00e9 sur '+R.nRapports+' rapport(s) comportant '+R.nCerfa+' fiche(s) CERFA. '+
+      'L\u2019\u00e9quivalent CO\u2082 est recalcul\u00e9 \u00e0 partir des quantit\u00e9s charg\u00e9es et du PRG du fluide : '+
+      'le tonnage inscrit sur un CERFA d\u00e9crit la charge de l\u2019\u00e9quipement, et l\u2019additionner '+
+      'compterait plusieurs fois le m\u00eame gaz.'+
+      (R.sansFluide ? '<br><strong>'+R.sansFluide+' fiche(s) sans d\u00e9nomination de fluide</strong>, regroup\u00e9es sous « non pr\u00e9cis\u00e9 ».' : '')+
+      (R.sansPGR.length ? '<br><strong>PRG inconnu</strong> pour : '+esc(R.sansPGR.join(', '))+
+        '. Leurs quantit\u00e9s sont compt\u00e9es, mais pas leur \u00e9quivalent CO\u2082.' : '')+
+    '</p>';
+}
+
+function exporterRegistre(R){
+  var L = [];
+  L.push(['Registre des fluides', R.annee==='tout'?'toutes ann\u00e9es':R.annee].join(';'));
+  L.push(['\u00c9dit\u00e9 le', new Date().toLocaleDateString('fr-FR'), CO_NAME].join(';'));
+  L.push('');
+  L.push(['Fluide','PRG','Fiches','Charge totale (kg)','Vierge A (kg)','Recycl\u00e9 B (kg)','R\u00e9g\u00e9n\u00e9r\u00e9 C (kg)',
+          'R\u00e9cup\u00e9r\u00e9 (kg)','Traitement D (kg)','R\u00e9utilisation E (kg)','\u00e9q. CO2 charg\u00e9 (t)'].join(';'));
+  function v(n){ return String(Math.round(n*100)/100).replace('.',','); }
+  R.fluides.forEach(function(a){
+    L.push([a.nom, a.pgr||'', a.n, v(a.chargee), v(a.vierge), v(a.recycle), v(a.regen),
+            v(a.recup), v(a.traitement), v(a.reutilisation), v(a.co2)].join(';'));
+  });
+  var t=R.total;
+  L.push(['TOTAL','',t.n,v(t.chargee),v(t.vierge),v(t.recycle),v(t.regen),
+          v(t.recup),v(t.traitement),v(t.reutilisation),v(t.co2)].join(';'));
+  L.push('');
+  L.push(['Site','Fiches','Charg\u00e9 (kg)','R\u00e9cup\u00e9r\u00e9 (kg)'].join(';'));
+  R.sites.forEach(function(x){ L.push([x.site, x.n, v(x.chargee), v(x.recup)].join(';')); });
+
+  var txt = '\ufeff' + L.join('\r\n');      /* BOM : Excel lit l'accentuation */
+  var nom = 'REGULAIR-registre-fluides-'+(R.annee==='tout'?'complet':R.annee)+'.csv';
+  var blob = new Blob([txt], {type:'text/csv;charset=utf-8'});
+  try{
+    var f = new File([blob], nom, {type:'text/csv'});
+    if(navigator.canShare && navigator.canShare({files:[f]})){
+      navigator.share({title:nom, files:[f]});
+      return;
+    }
+  }catch(e){}
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url; a.download=nom; a.style.display='none';
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); document.body.removeChild(a); },500);
+  toast(true,'Registre export\u00e9.');
+}
+
 function renderStats(){
   var per=ST.statsPer||'mois';
   var s=calculerStats(per);
@@ -2668,7 +2977,6 @@ function renderStats(){
       '<button class="icon-btn" id="st-back">'+icon('back')+'</button>'+
       '<div class="brand"><img src="'+LOGO_B64+'" alt="" style="height:28px;margin-right:8px;">Tableau de bord</div>'+
       '<div class="spacer"></div>'+
-      '<button class="btn ghost" id="st-export">'+icon('save',15)+' Export facturation</button>'+
     '</div>'+
     '<div class="page">'+
       '<div class="per-tabs">'+
@@ -2676,6 +2984,12 @@ function renderStats(){
           return '<button class="per-btn'+(p===per?' active':'')+'" data-per="'+p+'">'+libelle[p]+'</button>';
         }).join('')+
       '</div>'+
+      (estBureau()
+        ? '<div class="st-actions">'+
+            '<button class="btn ghost" id="st-registre">'+icon('pdf',15)+' Registre des fluides</button>'+
+            '<button class="btn ghost" id="st-export">'+icon('save',15)+' Export facturation</button>'+
+          '</div>'
+        : '')+
 
       '<div class="kpis">'+
         kpi(s.total,'intervention'+(s.total>1?'s':''),'amber')+
@@ -2721,7 +3035,10 @@ function renderStats(){
     '</div>';
 
   q('#st-back').onclick=function(){ ST.view='list'; renderApp(); };
-  q('#st-export').onclick=fenetreExportFactu;
+  var brg=q('#st-registre');
+  if(brg) brg.onclick=function(){ ST.view='registre'; ST.regAnnee=null; renderApp(); };
+  var bex=q('#st-export');
+  if(bex) bex.onclick=fenetreExportFactu;
   qa('[data-per]').forEach(function(b){
     b.onclick=function(){ ST.statsPer=b.dataset.per; renderStats(); };
   });
@@ -3216,6 +3533,47 @@ function proposerSuivi(r, blob, fname){
 }
 
 /* ═══════════ SAUVEGARDE & RESTAURATION ═══════════ */
+/* ═══════════ SAUVEGARDE AUTOMATIQUE ═══════════
+   Une page web ne peut pas écrire sur votre disque sans votre accord :
+   l'application prépare donc la sauvegarde et la réclame, mais c'est
+   vous qui décidez où elle atterrit. */
+var DELAI_SAUV = 7*24*3600*1000;      /* une semaine */
+
+async function noterSauvegarde(n){
+  try{ await sSet('sauv', {quand:Date.now(), n:n||0}); }catch(e){}
+  var bar=q('#sauv-bar'); if(bar) bar.remove();
+}
+async function derniereSauvegarde(){
+  try{ return await sGet('sauv'); }catch(e){ return null; }
+}
+async function sauvegardeDue(){
+  if(!ST.idx.length) return false;          /* rien à sauvegarder */
+  var s = await derniereSauvegarde();
+  if(!s || !s.quand) return true;           /* jamais sauvegardé */
+  return (Date.now() - s.quand) > DELAI_SAUV;
+}
+function joursDepuis(t){ return Math.floor((Date.now()-t)/86400000); }
+
+/* Rappel discret en tête de liste, jamais bloquant. */
+async function rappelSauvegarde(){
+  if(ST.view!=='list') return;
+  if(!await sauvegardeDue()) return;
+  var page=q('.page'); if(!page || q('#sauv-bar')) return;
+  var s = await derniereSauvegarde();
+  var quand = (s && s.quand)
+    ? 'Derni\u00e8re sauvegarde il y a '+joursDepuis(s.quand)+' jour(s).'
+    : 'Vos donn\u00e9es n\u2019ont jamais \u00e9t\u00e9 sauvegard\u00e9es.';
+  var bar=document.createElement('div');
+  bar.id='sauv-bar'; bar.className='sauv-bar';
+  bar.innerHTML='<span class="sv-tx"><strong>Sauvegarde conseill\u00e9e</strong><span>'+quand+
+    ' '+ST.idx.length+' rapport(s) et '+CLIENTS.length+' client(s) sur cet appareil.</span></span>'+
+    '<button class="btn amber sm" id="sv-go">Sauvegarder</button>'+
+    '<button class="sv-x" id="sv-no" title="Plus tard">\u00d7</button>';
+  page.insertBefore(bar, page.firstChild);
+  q('#sv-go').onclick=function(){ exportData(); };
+  q('#sv-no').onclick=function(){ bar.remove(); };
+}
+
 async function exportData(){
   try{
     toast(true,'Pr\u00e9paration de la sauvegarde\u2026');
@@ -3247,6 +3605,7 @@ async function exportData(){
       var file=new File([blob],nom,{type:'application/json'});
       if(navigator.canShare && navigator.canShare({files:[file]})){
         await navigator.share({title:nom, files:[file]});
+        await noterSauvegarde(reports.length);
         toast(true,reports.length+' rapport(s) et '+CLIENTS.length+' client(s) sauvegard\u00e9s.');
         return;
       }
@@ -3258,6 +3617,7 @@ async function exportData(){
     a.href=url; a.download=nom; a.style.display='none';
     document.body.appendChild(a); a.click();
     setTimeout(function(){URL.revokeObjectURL(url);document.body.removeChild(a);},500);
+    await noterSauvegarde(reports.length);
     toast(true,reports.length+' rapport(s) et '+CLIENTS.length+' client(s) sauvegard\u00e9s.');
   }catch(e){
     console.error(e);
@@ -3496,6 +3856,10 @@ async function init(){
   ensureLib().then(function(ok){ if(ok&&ST.view==='list') renderList(); });
 }
 function renderApp(){
+  if(ST.view==='registre'){
+    if(!estBureau()){ ST.view='list'; }   /* r\u00e9serv\u00e9 au bureau */
+    else return renderRegistre();
+  }
   if(ST.view==='stats') renderStats();
   else if(ST.view==='clients') renderClients();
   else if(ST.view==='list') renderList();
@@ -3514,13 +3878,27 @@ function renderList(){
     '<button class="btn amber" id="b-new">'+icon('plus',17)+' Nouveau rapport</button></div>'+
     '<div class="page"><div class="toolbar">'+
     '<div class="sw">'+icon('search',15)+'<input id="sinp" placeholder="Rechercher\u2026" value="'+esc(ST.search)+'"></div>'+
-    '</div><div id="cards"></div></div>';
+    '</div>'+
+    '<div class="fbar" id="fbar">'+FILTRES.map(function(f){
+        var n=compteFiltre(f.k);
+        return '<button class="fchip'+(ST.filtre===f.k?' on':'')+'" data-f="'+f.k+'">'+
+               f.l+(n?'<span class="fn">'+n+'</span>':'')+'</button>';
+      }).join('')+'</div>'+
+    '<div id="cards"></div></div>';
   q('#b-new').onclick=createRapport;
   q('#b-cfg').onclick=openCfg;
   q('#b-clients').onclick=function(){ ST.view='clients'; ST.clSearch=''; renderApp(); };
   var bs=q('#b-sync'); if(bs) bs.onclick=function(){ synchroniser(false); };
   var bst=q('#b-stats'); if(bst) bst.onclick=function(){ ST.view='stats'; renderApp(); };
   q('#sinp').oninput=function(e){ST.search=e.target.value;renderCards();};
+  setTimeout(rappelSauvegarde, 300);        /* après le rendu, sans le retarder */
+  var fb=q('#fbar');
+  if(fb) fb.onclick=function(ev){
+    var b=ev.target.closest('.fchip');
+    if(!b) return;
+    ST.filtre = b.getAttribute('data-f')||'';
+    renderApp();          /* on redessine pour rafraîchir les compteurs */
+  };
   renderCards();
 }
 
@@ -3528,9 +3906,8 @@ function renderCards(){
   var cont=q('#cards');
   var t=ST.search.trim().toLowerCase();
   var list=ST.idx.filter(visibleParMoi).sort(function(a,b){return(b.upd||0)-(a.upd||0);});
-  if(t==='@suite') list=list.filter(function(r){return(r.statut||'').indexOf('Suite')===0;});
-  else if(t==='@ouvert') list=list.filter(function(r){return (r.dossier||'attente')!=='cloture';});
-  else if(t) list=list.filter(function(r){return(r.ref||'').toLowerCase().includes(t)||(r.site||'').toLowerCase().includes(t);});
+  if(ST.filtre) list=list.filter(function(r){ return passeFiltre(r, ST.filtre); });
+  if(t) list=list.filter(function(r){return(r.ref||'').toLowerCase().includes(t)||(r.site||'').toLowerCase().includes(t);});
   if(!list.length){
     cont.innerHTML='<div class="empty"><h3>'+(ST.idx.length?'Aucun r\u00e9sultat':'Aucun rapport pour l\'instant')+'</h3>'+
       '<p>'+(ST.idx.length?'Essaie un autre terme.':'Cr\u00e9e ton premier rapport.')+'</p>'+
@@ -3539,24 +3916,10 @@ function renderCards(){
     return;
   }
   var bm={'R\u00e9solu':'br','Suite \u00e0 donner':'bs'};
-  /* Bandeau : interventions en attente de suite */
-  var nSuite=ST.idx.filter(function(r){return(r.statut||'').indexOf('Suite')===0;}).length;
-  var nOuv =ST.idx.filter(function(r){return (r.dossier||'attente')!=='cloture';}).length;
-  var banner='';
-  var nAEnvoyer = ST.idx.filter(function(r){
-    return (r.dossier||'attente')!=='cloture' && !r.mailEnvoye;
-  }).length;
-  if(nOuv) banner+='<div class="suite-banner open" id="open-banner">'+
-      '<span class="sb-dot" style="background:#B8860B;"></span><strong>'+nOuv+'</strong> dossier'+(nOuv>1?'s':'')+
-      ' non cl\u00f4tur\u00e9'+(nOuv>1?'s':'')+
-      (nAEnvoyer ? ' \u2014 dont <strong>'+nAEnvoyer+'</strong> \u00e0 envoyer' : '')+
-      '<button class="sb-filter" id="ob-filter">'+(ST.search==='@ouvert'?'Tout afficher':'Voir')+'</button></div>';
-  if(nSuite) banner+='<div class="suite-banner" id="suite-banner">'+
-      '<span class="sb-dot"></span><strong>'+nSuite+'</strong> intervention'+(nSuite>1?'s':'')+
-      ' en attente de suite<button class="sb-filter" id="sb-filter">'+
-      (ST.search==='@suite'?'Tout afficher':'Voir')+'</button></div>';
+  /* Les puces de filtre affichent déjà ces compteurs et filtrent au clic :
+     un bandeau par-dessus ferait doublon. */
   cont.className='grid';
-  cont.innerHTML=banner+list.map(function(r){
+  cont.innerHTML=list.map(function(r){
     return'<div class="card" data-id="'+r.id+'">'+
       '<div class="ctop"><span class="cref">'+esc(r.ref)+'</span>'+
         '<span class="badge '+(bm[r.statut]||'ba')+'">'+esc(r.statut||'\u2014')+'</span></div>'+
@@ -3578,14 +3941,6 @@ function renderCards(){
         '<button class="btn ghost ico del-btn" title="Supprimer">'+icon('trash',14)+'</button>'+
       '</div></div>';
   }).join('');
-  var obf=q('#ob-filter');
-  if(obf) obf.onclick=function(){ ST.search=(ST.search==='@ouvert')?'':'@ouvert'; var si=q('#sinp'); if(si) si.value=''; renderCards(); };
-  var sbf=q('#sb-filter');
-  if(sbf) sbf.onclick=function(){
-    ST.search = (ST.search==='@suite') ? '' : '@suite';
-    var si=q('#sinp'); if(si) si.value = (ST.search==='@suite')?'':'';
-    renderCards();
-  };
   qa('.card').forEach(function(card){
     var id=card.dataset.id;
     card.querySelector('.open-btn').onclick=function(){openRapport(id);};
@@ -3600,10 +3955,49 @@ function renderCards(){
 }
 
 /* ===== CRUD ===== */
+/* Marque courte et stable identifiant l'appareil / le technicien.
+   Sans elle, chaque appareil repart de 0001 et deux interventions
+   différentes portent la même référence. */
+async function marqueTech(){
+  var m = await sGet('marque');
+  if(m) return m;
+  var src = (SY.user || ST.cfg.tech || '').trim();
+  if(src){
+    /* Initiales : « Adrien PRAT » -> « AP ». */
+    var mots = src.split(/[\s-]+/).filter(Boolean);
+    m = mots.slice(0,2).map(function(x){ return x.charAt(0); }).join('').toUpperCase();
+    if(m.length===1) m += (mots[0].charAt(1)||'X').toUpperCase();
+  }
+  if(!m || m.length<2){
+    /* Pas de nom renseigné : marque aléatoire, stable pour cet appareil. */
+    var L='ABCDEFGHJKLMNPQRSTUVWXYZ';
+    m = L.charAt(Math.floor(Math.random()*L.length)) + L.charAt(Math.floor(Math.random()*L.length));
+  }
+  await sSet('marque', m);
+  return m;
+}
+
 async function nextRef(){
-  var c=(await sGet('ctr'))||{v:0};c.v=(c.v||0)+1;
+  var c=(await sGet('ctr'))||{v:0};
+  var an=new Date().getFullYear();
+  /* Compteur remis à zéro au changement d'année. */
+  if(c.an !== an){ c.an = an; c.v = 0; }
+  c.v=(c.v||0)+1;
   await sSet('ctr',c);
-  return'RI-'+new Date().getFullYear()+'-'+String(c.v).padStart(4,'0');
+  var mq = await marqueTech();
+  return 'RI-'+an+'-'+mq+String(c.v).padStart(4,'0');
+}
+
+/* Repère les références en double, qui ne peuvent venir que d'anciens
+   rapports créés avant la correction. */
+function refsEnDouble(){
+  var vus={}, dbl={};
+  ST.idx.forEach(function(e){
+    var k=(e.ref||'').trim().toUpperCase();
+    if(!k) return;
+    if(vus[k]) dbl[k]=(dbl[k]||1)+1; else vus[k]=1;
+  });
+  return Object.keys(dbl).map(function(k){ return {ref:k, n:dbl[k]}; });
 }
 async function createRapport(){var ref=await nextRef();ST.cur=defRapport(ref);ST.tab='info';ST.view='form';renderApp();}
 async function openRapport(id){
@@ -4644,6 +5038,7 @@ function openCfg(){
     '<div class="cfg-sep"></div>'+
     '<div style="margin-bottom:6px;"><label style="font-size:12px;font-weight:600;color:var(--soft);text-transform:uppercase;letter-spacing:.03em;">Donn\u00e9es</label></div>'+
     '<p class="cfg-hint">'+ST.idx.length+' rapport(s) et '+CLIENTS.length+' client(s) enregistr\u00e9(s) sur cet appareil. Exportez r\u00e9guli\u00e8rement : les donn\u00e9es vivent dans ce navigateur uniquement.</p>'+
+    '<p class="cfg-hint" id="cfg-sauv-date" style="margin-top:-6px;"></p>'+
     '<div style="display:flex;gap:8px;margin-bottom:14px;">'+
       '<button class="btn ghost" id="cfg-export" style="flex:1;justify-content:center;">'+icon('save',14)+' Sauvegarder</button>'+
       '<button class="btn ghost" id="cfg-import" style="flex:1;justify-content:center;">'+icon('open',14)+' Restaurer</button>'+
@@ -4709,6 +5104,18 @@ function openCfg(){
         'à votre nom. Choisissez <strong>Bureau</strong> pour voir ceux de vos collaborateurs.</span>';
   }
   if(selRole){ selRole.onchange=majAideRole; majAideRole(); }
+
+  /* Date du dernier enregistrement, lue après ouverture de la fenêtre. */
+  derniereSauvegarde().then(function(sv){
+    var el=q('#cfg-sauv-date'); if(!el) return;
+    if(sv && sv.quand){
+      var j=joursDepuis(sv.quand);
+      el.innerHTML = 'Derni\u00e8re sauvegarde : '+new Date(sv.quand).toLocaleDateString('fr-FR')+
+        (j>7 ? ' <strong style="color:#8A6A1F;">\u2014 il y a '+j+' jours</strong>' : ' (il y a '+j+' jour'+(j>1?'s':'')+')');
+    } else {
+      el.innerHTML = '<strong style="color:#8A6A1F;">Aucune sauvegarde effectu\u00e9e \u00e0 ce jour.</strong>';
+    }
+  });
 
   var bmj=q('#cfg-maj');
   if(bmj) bmj.onclick=function(){ verifierMaj(false); };
