@@ -790,7 +790,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-0935';
+var VERSION = '2026.10.07-0955';
 
 async function verifierMaj(silencieux){
   try{
@@ -1444,31 +1444,13 @@ async function synchroniser(silencieux){
   if(!silencieux) fenetreProgres();
 
   try{
-    /* 1 ─ Envoi des rapports modifiés depuis la dernière synchro */
-    for(var i=0;i<ST.idx.length;i++){
-      var e = ST.idx[i];
-      if((e.upd||0) <= (SY.last - MARGE_SYNC)) continue;
-      var r = null;
-      try{ r = await sGet('r:'+e.id); }catch(ex){}
-      if(!r) continue;
-      var ok = false;
-      try{ ok = await pousserRapport(r); }
-      catch(ex){ console.error('Envoi du rapport', e.ref, ex); }
-      if(ok) envoyes++; else erreurs++;
-      noter('Rapport '+(e.ref||e.id), ok?'envoy\u00e9':'\u00c9CHEC');
-      majProgres('Envoi des rapports', i+1, ST.idx.length);
-    }
-
-    /* 2 ─ Envoi des clients, par paquets */
-    if(CLIENTS.length){
-      majProgres('Envoi des clients', 0, CLIENTS.length);
-      var okc = await pousserClients(CLIENTS);
-      noter('Clients', okc ? CLIENTS.length+' envoy\u00e9s' : '\u00c9CHEC de l\u2019envoi');
-      if(okc) envoyes += CLIENTS.length; else erreurs++;
-    }
+    /* 0 ─ Les suppressions partent en premier, et la réception précède
+       l'envoi : un appareil doit apprendre qu'un rapport a été supprimé
+       avant de risquer de le renvoyer et de le faire resurgir. */
+    if(!await pousserTombes()) noter('Suppressions', 'reportées');
 
     majProgres('R\u00e9ception', 0, 0);
-    /* 3 ─ Réception des nouveautés */
+    /* 1 ─ Réception d'abord : on apprend ce qui a changé ailleurs */
     var depuis = Math.max(0, (SY.last||0) - MARGE_SYNC);
     var lignes = null;
     try{ lignes = await lireTout('rapports?maj=gt.'+depuis+'&select=*&order=maj.asc'); }
@@ -1479,6 +1461,17 @@ async function synchroniser(silencieux){
         var L = lignes[k];
         var dist = L.contenu;
         if(!dist || !dist.id) continue;
+        /* Rapport supprimé ailleurs : on l'efface ici aussi. */
+        if(dist.supprime){
+          var ancien = ST.idx.length;
+          ST.idx = ST.idx.filter(function(x){ return x.id!==dist.id; });
+          if(ST.idx.length !== ancien){
+            try{ await sDel('r:'+dist.id); }catch(ex){}
+            recus++;
+            noter('Supprimé à distance', dist.id);
+          }
+          continue;
+        }
         var loc = await sGet('r:'+dist.id);
         /* Le plus récent gagne */
         if(loc && (loc.updatedAt||0) >= (dist.updatedAt||0)) continue;
@@ -1501,7 +1494,7 @@ async function synchroniser(silencieux){
       await sSet('idx', ST.idx);
     }
 
-    /* 4 ─ Réception des clients */
+    /* 2 ─ Réception des clients */
     var lc = null;
     try{ lc = await lireTout('clients?maj=gt.'+depuis+'&select=*&order=maj.asc'); }
     catch(ex){ noter('R\u00e9ception clients','\u00c9CHEC '+(ex&&ex.message||ex)); erreurs++; }
@@ -1515,6 +1508,29 @@ async function synchroniser(silencieux){
         recus++;
       });
       await saveClients();
+    }
+
+    /* 3 ─ Envoi de nos propres modifications */
+    for(var i=0;i<ST.idx.length;i++){
+      var e = ST.idx[i];
+      if((e.upd||0) <= (SY.last - MARGE_SYNC)) continue;
+      var r = null;
+      try{ r = await sGet('r:'+e.id); }catch(ex){}
+      if(!r) continue;
+      var ok = false;
+      try{ ok = await pousserRapport(r); }
+      catch(ex){ console.error('Envoi du rapport', e.ref, ex); }
+      if(ok) envoyes++; else erreurs++;
+      noter('Rapport '+(e.ref||e.id), ok?'envoy\u00e9':'\u00c9CHEC');
+      majProgres('Envoi des rapports', i+1, ST.idx.length);
+    }
+
+    /* 4 ─ Envoi des clients, par paquets */
+    if(CLIENTS.length){
+      majProgres('Envoi des clients', 0, CLIENTS.length);
+      var okc = await pousserClients(CLIENTS);
+      noter('Clients', okc ? CLIENTS.length+' envoy\u00e9s' : '\u00c9CHEC de l\u2019envoi');
+      if(okc) envoyes += CLIENTS.length; else erreurs++;
     }
 
     noter('Termin\u00e9', envoyes+' envoy\u00e9(s), '+recus+' re\u00e7u(s), '+erreurs+' erreur(s)');
@@ -3060,15 +3076,32 @@ async function envoyerSuivi(r, blob, fname, destOverride){
   var corps = corpsSuivi(r);                    /* version complète : Gmail, Outlook web, mobile */
   var mlink = buildMailto(dest, suj, corpsCourt(r));  /* version courte : application installée */
 
+  var dejaMarque = false;
   async function marquerEnvoye(){
+    if(dejaMarque) return;          /* deux clics ne comptent pas double */
+    dejaMarque = true;
     r.mailEnvoye=true; r.mailDate=new Date().toISOString(); r.mailDest=dest;
+    r.updatedAt=Date.now();
+    /* Un rapport résolu et transmis n'attend plus rien : on le clôture.
+       « Suite à donner » reste ouvert, puisque justement il reste à faire. */
+    var clot = !isSuite(r) && r.dossier!=='cloture';
+    if(clot) r.dossier='cloture';
     if(ST.cur && ST.cur.id===r.id){
       ST.cur.mailEnvoye=true; ST.cur.mailDate=r.mailDate; ST.cur.mailDest=dest;
+      ST.cur.updatedAt=r.updatedAt;
+      if(clot) ST.cur.dossier='cloture';
     }
     try{ await sSet('r:'+r.id,r); }catch(e){}
     var ix=ST.idx.findIndex(function(x){return x.id===r.id;});
-    if(ix>=0){ ST.idx[ix].mailEnvoye=true; try{ await sSet('idx',ST.idx); }catch(e){} }
+    if(ix>=0){
+      ST.idx[ix].mailEnvoye=true;
+      ST.idx[ix].upd=r.updatedAt;
+      if(clot) ST.idx[ix].dossier='cloture';
+      try{ await sSet('idx',ST.idx); }catch(e){}
+    }
     if(q('#dossier-box')) refreshDossier();
+    if(ST.view==='list') renderCards();
+    if(SY.on) setTimeout(function(){ synchroniser(true); }, 500);
   }
 
   /* ── Mobile : partage natif, PDF joint automatiquement ── */
@@ -3112,6 +3145,11 @@ async function envoyerSuivi(r, blob, fname, destOverride){
   q('#mbg').onclick=function(e){ if(e.target.id==='mbg') cleanup(); };
   q('#env-annuler').onclick=cleanup;
   q('#env-ok').onclick=async function(){ cleanup(); await marquerEnvoye(); toast(true,'Rapport marqu\u00e9 comme envoy\u00e9.'); };
+  /* Ouvrir la messagerie vaut envoi : c'est le geste que l'on peut observer.
+     Sans cela, le rapport restait « en attente » d\u00e8s qu'on fermait la fen\u00eatre. */
+  Array.prototype.forEach.call(document.querySelectorAll('.env-app'), function(a){
+    a.addEventListener('click', function(){ marquerEnvoye(); });
+  });
   q('#cp-dest').onclick=function(){
     try{
       navigator.clipboard.writeText(dest);
@@ -3482,9 +3520,13 @@ function renderCards(){
   var nSuite=ST.idx.filter(function(r){return(r.statut||'').indexOf('Suite')===0;}).length;
   var nOuv =ST.idx.filter(function(r){return (r.dossier||'attente')!=='cloture';}).length;
   var banner='';
+  var nAEnvoyer = ST.idx.filter(function(r){
+    return (r.dossier||'attente')!=='cloture' && !r.mailEnvoye;
+  }).length;
   if(nOuv) banner+='<div class="suite-banner open" id="open-banner">'+
       '<span class="sb-dot" style="background:#B8860B;"></span><strong>'+nOuv+'</strong> dossier'+(nOuv>1?'s':'')+
       ' non cl\u00f4tur\u00e9'+(nOuv>1?'s':'')+
+      (nAEnvoyer ? ' \u2014 dont <strong>'+nAEnvoyer+'</strong> \u00e0 envoyer' : '')+
       '<button class="sb-filter" id="ob-filter">'+(ST.search==='@ouvert'?'Tout afficher':'Voir')+'</button></div>';
   if(nSuite) banner+='<div class="suite-banner" id="suite-banner">'+
       '<span class="sb-dot"></span><strong>'+nSuite+'</strong> intervention'+(nSuite>1?'s':'')+
@@ -3496,8 +3538,13 @@ function renderCards(){
       '<div class="ctop"><span class="cref">'+esc(r.ref)+'</span>'+
         '<span class="badge '+(bm[r.statut]||'ba')+'">'+esc(r.statut||'\u2014')+'</span></div>'+
       '<div class="cflags">'+
-        (r.dossier==='cloture' ? '<span class="flag clos">\u2713 Cl\u00f4tur\u00e9</span>' : '<span class="flag wait">En attente</span>')+
-        (r.mailEnvoye ? '<span class="flag sent">\u2709 Envoy\u00e9</span>' : '')+
+        /* Une seule pastille d'\u00e9tat, celle de l'\u00e9tape atteinte :
+           « En attente » ne signale que ce qui reste \u00e0 faire. */
+        (r.dossier==='cloture'
+           ? '<span class="flag clos">\u2713 Cl\u00f4tur\u00e9</span>'
+           : r.mailEnvoye
+             ? '<span class="flag sent">\u2709 Envoy\u00e9</span>'
+             : '<span class="flag wait">En attente</span>')+
       '</div>'+
       '<div class="csite">'+esc(r.site||'(Sans site)')+'</div>'+
       '<div class="cdate">'+fmtRange(r)+'</div>'+
@@ -3554,11 +3601,91 @@ async function dupRapport(id){
   ST.cur=c;ST.tab='info';ST.view='form';renderApp();
   toast(true,'Dupliqu\u00e9 depuis '+r.ref);
 }
+/* Une suppression doit voyager comme une modification, sinon la base la
+   réimpose au prochain échange. On laisse donc une trace : la ligne reste
+   en ligne mais marquée supprimée, et chaque appareil l'efface à son tour. */
+async function marquerSupprime(id, chemins){
+  var t = await sGet('tombes') || [];
+  /* Ancien format : simple liste d'identifiants. */
+  t = t.map(function(x){ return (typeof x === 'string') ? {id:x, ph:[], ligne:false, essais:0} : x; });
+  var dedans = t.filter(function(x){ return x.id===id; })[0];
+  if(dedans){ dedans.ph = (dedans.ph||[]).concat(chemins||[]); }
+  else t.push({id:id, ph:chemins||[], ligne:false, essais:0});
+  await sSet('tombes', t);
+}
+
+/* Supprime une photo du stockage. true si elle n'y est plus. */
+async function effacerPhotoDistante(chemin){
+  try{
+    var r = await fetch(normUrl(SY.url)+'/storage/v1/object/photos/'+chemin, {
+      method:'DELETE',
+      headers:{'apikey':SY.key, 'Authorization':'Bearer '+SY.key}
+    });
+    return r.ok || r.status===404;      /* absente = objectif atteint */
+  }catch(e){ return false; }
+}
+async function pousserTombes(){
+  if(!SY.on) return true;
+  var t = await sGet('tombes');
+  if(!t || !t.length) return true;
+  t = t.map(function(x){ return (typeof x === 'string') ? {id:x, ph:[], ligne:false, essais:0} : x; });
+  var restantes = [], maintenant = Date.now();
+
+  for(var i=0;i<t.length;i++){
+    var e = t[i];
+    e.essais = (e.essais||0) + 1;
+
+    /* a ─ la ligne, marquée supprimée */
+    if(!e.ligne){
+      try{
+        var resp = await fetch(apiURL('rapports'), {
+          method:'POST',
+          headers: apiHead({'Prefer':'resolution=merge-duplicates,return=minimal'}),
+          body: JSON.stringify({
+            id:e.id, ref:'', tech:'', site:'', statut:'', dossier:'supprime',
+            maj: maintenant,
+            contenu:{ id:e.id, supprime:true, updatedAt: maintenant }
+          })
+        });
+        e.ligne = resp.ok;
+      }catch(ex){}
+    }
+
+    /* b ─ les photos du stockage */
+    var reste = [];
+    for(var j=0;j<(e.ph||[]).length;j++){
+      if(!await effacerPhotoDistante(e.ph[j])) reste.push(e.ph[j]);
+    }
+    e.ph = reste;
+
+    /* On réessaie tant que la ligne n'est pas passée. Les photos récalcitrantes
+       (règle d'accès manquante) sont abandonnées après trois tentatives :
+       elles n'encombrent que le stockage, et bloquer la file serait pire. */
+    if(!e.ligne) restantes.push(e);
+    else if(e.ph.length && e.essais < 3) restantes.push(e);
+    else if(e.ph.length) noter('Photos non supprim\u00e9es', e.ph.length+' pour '+e.id);
+  }
+
+  await sSet('tombes', restantes);
+  return !restantes.filter(function(x){ return !x.ligne; }).length;
+}
+
 async function delRapport(id){
+  /* Relever les photos avant d'effacer la fiche : après, on ne saurait plus
+     lesquelles supprimer du stockage. */
+  var chemins = [];
+  try{
+    var av = await sGet('r:'+id);
+    if(av && av.photos) av.photos.forEach(function(ph){
+      if(ph && ph.id) chemins.push(id+'/'+ph.id+'.jpg');
+    });
+  }catch(e){}
   await sDel('r:'+id);
   ST.idx=ST.idx.filter(function(r){return r.id!==id;});
   await sSet('idx',ST.idx);
+  await marquerSupprime(id, chemins);
   renderCards();toast(true,'Rapport supprim\u00e9.');
+  if(SY.on) setTimeout(function(){ synchroniser(true); }, 400);
 }
 async function save(showToast){
   var r=ST.cur;r.updatedAt=Date.now();
