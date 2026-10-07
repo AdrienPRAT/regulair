@@ -910,7 +910,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1300';
+var VERSION = '2026.10.07-1320';
 
 async function verifierMaj(silencieux){
   try{
@@ -3265,6 +3265,19 @@ function fenetreNouveauModele(champ){
 /* ═══════════ DICTÉE VOCALE ═══════════ */
 
 var RECO = null, RECO_CHAMP = null;
+var RECO_VOULUE = false;      /* l'utilisateur veut-il toujours dicter ? */
+var RECO_RELANCES = 0;        /* garde-fou contre une relance sans fin */
+
+/* Nettoyage léger : la reconnaissance vocale ne ponctue pas et laisse
+   des espaces en trop. */
+function propreDictee(t){
+  return String(t||'')
+    .replace(/\s+/g,' ')
+    .replace(/\s+([,.;:!?])/g,'$1')
+    .replace(/([,.;:!?])(?=[^\s])/g,'$1 ')
+    .replace(/(^|[.!?]\s+)([a-z\u00e0-\u00ff])/g, function(_,a,b){ return a+b.toUpperCase(); })
+    .trim();
+}
 
 function dicteeDispo(){
   return typeof (window.SpeechRecognition || window.webkitSpeechRecognition) !== 'undefined';
@@ -3290,25 +3303,37 @@ function basculerDictee(champ, bouton){
   RECO_CHAMP=champ;
 
   var el=q('[data-f="'+champ+'"]');
-  var base = el ? (el.value||'') : '';
+  var base = el ? (el.value||'') : '';     /* texte déjà présent avant la dictée */
+  var blocs = [];                          /* un segment par index de résultat */
+  var acquis = '';                         /* segments des sessions précédentes */
+
+  function composer(encours){
+    var dit = blocs.filter(Boolean).join(' ');
+    var tout = [acquis, dit].filter(Boolean).join(' ');
+    if(encours) tout = [tout, encours].filter(Boolean).join(' ');
+    return [base.replace(/\s+$/,''), propreDictee(tout)].filter(Boolean).join(base?' ':'');
+  }
 
   RECO.onstart=function(){
     if(bouton) bouton.classList.add('actif');
-    toast(true,'Dict\u00e9e en cours \u2014 parlez, puis touchez le micro pour arr\u00eater.');
+    if(!RECO_RELANCES)
+      toast(true,'Dict\u00e9e en cours \u2014 parlez, puis touchez le micro pour arr\u00eater.');
   };
+
+  /* On ne cumule pas : on réécrit chaque segment à sa place. Safari renvoie
+     parfois des résultats déjà définitifs, et toute accumulation les
+     dupliquait. Réécrire au même index est sans effet la seconde fois. */
   RECO.onresult=function(ev){
-    var fini='', encours='';
-    for(var i=ev.resultIndex;i<ev.results.length;i++){
+    var encours='';
+    for(var i=0;i<ev.results.length;i++){
       var t=ev.results[i][0].transcript;
-      if(ev.results[i].isFinal) fini+=t; else encours+=t;
+      if(ev.results[i].isFinal) blocs[i]=t;
+      else encours += t;
     }
-    if(fini){
-      base = (base ? base.replace(/\s+$/,'')+' ' : '') + fini.trim();
-      if(el){ el.value=base; deepSet(ST.cur, champ, base); }
-    } else if(el && encours){
-      el.value = (base ? base+' ' : '') + encours;
-    }
-    if(el){ try{ el.scrollTop=el.scrollHeight; }catch(e){} }
+    if(!el) return;
+    el.value = composer(encours);
+    deepSet(ST.cur, champ, el.value);
+    try{ el.scrollTop=el.scrollHeight; }catch(e){}
   };
   RECO.onerror=function(ev){
     if(ev.error==='not-allowed'){
@@ -3319,16 +3344,29 @@ function basculerDictee(champ, bouton){
     arreterDictee();
   };
   RECO.onend=function(){
-    if(bouton) bouton.classList.remove('actif');
     if(el){ deepSet(ST.cur, champ, el.value); }
-    RECO=null; RECO_CHAMP=null;
+    /* Les moteurs s'arrêtent d'eux-mêmes après quelques secondes de silence,
+       même en mode continu. Tant que l'utilisateur n'a pas touché le micro,
+       on repart — sinon une phrase sur deux se perd. */
+    var neuf = blocs.filter(Boolean).join(' ').trim();
+    if(RECO_VOULUE && RECO_CHAMP===champ && RECO_RELANCES < 20){
+      acquis = [acquis, neuf].filter(Boolean).join(' ');
+      blocs = [];
+      RECO_RELANCES++;
+      try{ RECO.start(); return; }catch(e){}
+    }
+    if(bouton) bouton.classList.remove('actif');
+    RECO=null; RECO_CHAMP=null; RECO_VOULUE=false; RECO_RELANCES=0;
   };
 
+  RECO_VOULUE = true; RECO_RELANCES = 0;
   try{ RECO.start(); }
-  catch(e){ toast(false,'Dict\u00e9e indisponible.'); RECO=null; RECO_CHAMP=null; }
+  catch(e){ toast(false,'Dict\u00e9e indisponible.'); RECO=null; RECO_CHAMP=null; RECO_VOULUE=false; }
 }
 
 function arreterDictee(){
+  RECO_VOULUE = false;            /* avant stop() : onend ne doit pas relancer */
+  RECO_RELANCES = 0;
   if(!RECO) return;
   try{ RECO.stop(); }catch(e){}
   qa('.mic-btn.actif').forEach(function(b){ b.classList.remove('actif'); });
