@@ -872,7 +872,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1130';
+var VERSION = '2026.10.07-1140';
 
 async function verifierMaj(silencieux){
   try{
@@ -2820,9 +2820,10 @@ async function calculerRegistre(annee){
       a.reutilisation+= nbFr(c.reutilisation);
 
       var st = (r.site||'(sans site)').trim();
-      if(!sites[st]) sites[st] = {site:st, n:0, chargee:0, recup:0};
+      if(!sites[st]) sites[st] = {site:st, n:0, chargee:0, recycle:0, recup:0};
       sites[st].n++;
       sites[st].chargee += nbFr(c.chargee);
+      sites[st].recycle += nbFr(c.recycle);
       sites[st].recup   += nbFr(c.recup);
     });
   }
@@ -2918,11 +2919,16 @@ async function renderRegistre(){
 
     '<div class="tear">Par site</div>'+
     '<div class="rg-wrap"><table class="rg-t">'+
-      '<thead><tr><th>Site</th><th>Fiches</th><th>Charg\u00e9 (kg)</th><th>R\u00e9cup\u00e9r\u00e9 (kg)</th></tr></thead><tbody>'+
+      '<thead><tr><th>Site</th><th>Fiches</th><th>Charg\u00e9 (kg)</th>'+
+      '<th>dont recycl\u00e9, r\u00e9introduit</th><th>R\u00e9cup\u00e9r\u00e9 (kg)</th></tr></thead><tbody>'+
       R.sites.map(function(x){
         return '<tr><td class="rg-nom">'+esc(x.site)+'</td><td>'+x.n+'</td>'+
-               '<td class="rg-f">'+kg(x.chargee)+'</td><td class="rg-f">'+kg(x.recup)+'</td></tr>';
+               '<td class="rg-f">'+kg(x.chargee)+'</td><td>'+kg(x.recycle)+'</td>'+
+               '<td class="rg-f">'+kg(x.recup)+'</td></tr>';
       }).join('')+
+      '<tr class="rg-tot"><td>Total</td><td>'+R.total.n+'</td>'+
+        '<td>'+kg(R.total.chargee)+'</td><td>'+kg(R.total.recycle)+'</td>'+
+        '<td>'+kg(R.total.recup)+'</td></tr>'+
       '</tbody></table></div>'+
 
     '<p class="cfg-hint" style="margin-top:14px;">'+
@@ -2948,8 +2954,11 @@ function exporterRegistre(R){
   L.push(['TOTAL','',t.n,v(t.chargee),v(t.vierge),v(t.recycle),v(t.regen),
           v(t.recup),v(t.traitement),v(t.reutilisation)].join(';'));
   L.push('');
-  L.push(['Site','Fiches','Charg\u00e9 (kg)','R\u00e9cup\u00e9r\u00e9 (kg)'].join(';'));
-  R.sites.forEach(function(x){ L.push([x.site, x.n, v(x.chargee), v(x.recup)].join(';')); });
+  L.push(['Site','Fiches','Charg\u00e9 (kg)','Recycl\u00e9 r\u00e9introduit (kg)','R\u00e9cup\u00e9r\u00e9 (kg)'].join(';'));
+  R.sites.forEach(function(x){
+    L.push([x.site, x.n, v(x.chargee), v(x.recycle||0), v(x.recup)].join(';'));
+  });
+  L.push(['TOTAL', t.n, v(t.chargee), v(t.recycle), v(t.recup)].join(';'));
 
   var txt = '\ufeff' + L.join('\r\n');      /* BOM : Excel lit l'accentuation */
   var nom = 'REGULAIR-registre-fluides-'+(R.annee==='tout'?'complet':R.annee)+'.csv';
