@@ -224,6 +224,12 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .st-actions{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;}
 .st-actions .btn{flex:1 1 200px;justify-content:center;}
 
+/* Rattachement d'une fiche CERFA à un équipement */
+.eq-lien{display:flex;flex-direction:column;gap:3px;margin:-4px 0 12px;font-size:12.5px;}
+.eq-lien .eq-on{color:#1F6B36;}
+.eq-lien .eq-off{color:var(--soft);}
+.eq-lien .eq-hist{color:#8A6A1F;font-weight:600;}
+
 /* Registre des fluides */
 .rg-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);
   border-radius:10px;background:#fff;margin-bottom:4px;}
@@ -599,7 +605,7 @@ var PADS={};
 function defCerfa(){
   return{
     active:false,ficheNum:'',op:CERFA_OP,det:'',attest:CERFA_ATTEST,
-    equipIdent:'',fluideDenom:'',chargeTot:'',tonnCO2:'',
+    equipId:'',equipIdent:'',fluideDenom:'',chargeTot:'',tonnCO2:'',
     nature:{},natureAutre:'',detectIdent:'',detectDate:'',sysPerm:'',
     qFluide:{},freqSans:'',freqAvec:'',fuitesConst:'',
     fuites:[{loc:'',rep:''},{loc:'',rep:''},{loc:'',rep:''}],
@@ -756,6 +762,10 @@ function applyEquip(e){
   if(!e) return;
   migreCerfas(ST.cur);
   var P='cerfas.'+ST.cur.cerfaIdx+'.';
+  /* Le libellé est un instantané destiné au document ; l'identifiant, lui,
+     survit à un changement de marque ou de désignation. Sans lui, impossible
+     de retrouver l'historique d'une machine. */
+  deepSet(ST.cur, P+'equipId', e.id||'');
   var ident=[e.designation,e.marque,e.modele,e.serie?'N\u00b0 '+e.serie:''].filter(Boolean).join(' ');
   if(ident){
     deepSet(ST.cur,P+'equipIdent',ident);
@@ -774,7 +784,35 @@ function applyEquip(e){
     deepSet(ST.cur,P+'tonnCO2',co2);
     var et=q('[data-f="'+P+'tonnCO2"]'); if(et) et.value=co2;
   }
+  majLienEquip();
   toast(true,'\u00c9quipement report\u00e9 dans la fiche fluides.');
+}
+
+/* Témoin du rattachement : sans lui, le lien serait invisible et donc
+   invérifiable. Il annonce aussi les recharges déjà enregistrées. */
+async function majLienEquip(){
+  var zone = q('#eq-lien');
+  if(!zone || !ST.cur) return;
+  migreCerfas(ST.cur);
+  var c = ST.cur.cerfas[ST.cur.cerfaIdx];
+  if(!c){ zone.innerHTML=''; return; }
+  var e = equipDuCerfa(ST.cur, c);
+  if(!e){
+    zone.innerHTML = c.equipIdent
+      ? '<span class="eq-off">Saisie libre \u2014 non rattach\u00e9e \u00e0 une fiche \u00e9quipement du client.</span>'
+      : '';
+    return;
+  }
+  var nom = [e.designation, e.marque, e.modele].filter(Boolean).join(' ') || '\u00c9quipement';
+  zone.innerHTML = '<span class="eq-on">\u2713 Rattach\u00e9 \u00e0 <strong>'+esc(nom)+
+    (e.serie?' \u2014 n\u00b0 '+esc(e.serie):'')+'</strong></span>';
+  var h = await historiqueEquip(c.equipId, ST.cur.id);
+  if(!h.length) return;
+  var kgTot = h.reduce(function(a,x){ return a + nbFr(x.chargee); }, 0);
+  if(kgTot>0)
+    zone.innerHTML += '<span class="eq-hist">'+h.length+' intervention'+(h.length>1?'s':'')+
+      ' ant\u00e9rieure'+(h.length>1?'s':'')+' sur cette machine, '+kg(kgTot)+
+      ' kg charg\u00e9s au total.</span>';
 }
 
 /* Choix parmi plusieurs équipements */
@@ -872,7 +910,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1140';
+var VERSION = '2026.10.07-1155';
 
 async function verifierMaj(silencieux){
   try{
@@ -2268,8 +2306,9 @@ function mapCSV(rows){
 /* Boutons du panneau CERFA */
 function bindCerfaUI(){
   qa('[data-cgo]').forEach(function(b){
-    b.onclick=function(){ allerCerfa(parseInt(b.dataset.cgo,10)); };
+    b.onclick=function(){ allerCerfa(parseInt(b.dataset.cgo,10)); setTimeout(majLienEquip,60); };
   });
+  setTimeout(majLienEquip,60);
   var ba=q('#c-add');   if(ba) ba.onclick=ajouterCerfa;
   var bd=q('#c-del');   if(bd) bd.onclick=function(){ supprimerCerfa(ST.cur.cerfaIdx); };
   var ea=q('#c-eqadd'); if(ea) ea.onclick=function(){ fenetreEquip(null); };
@@ -2314,7 +2353,51 @@ function migreCerfas(r){
   }
   if(!r.cerfas.length) r.cerfas=[defCerfa()];
   if(typeof r.cerfaIdx!=='number' || r.cerfaIdx>=r.cerfas.length) r.cerfaIdx=0;
+  /* Rattrapage des fiches antérieures : on retrouve l'équipement par son
+     libellé, une fois, puis le lien tient tout seul. */
+  var cli = null, cherche = false;
+  r.cerfas.forEach(function(c){
+    if(!c || c.equipId || !c.equipIdent) return;
+    if(!cherche){ cherche = true; cli = clientDuRapport(r); }
+    if(!cli || !cli.equip) return;
+    var lib = String(c.equipIdent).toLowerCase();
+    var trouve = cli.equip.filter(function(e){
+      var s = String(e.serie||'').trim();
+      if(s && lib.indexOf(s.toLowerCase())>=0) return true;      /* n° de série : sûr */
+      var d = String(e.designation||'').trim();
+      return d.length>2 && lib.indexOf(d.toLowerCase())>=0;
+    });
+    if(trouve.length===1) c.equipId = trouve[0].id;              /* une seule correspondance */
+  });
   return r;
+}
+
+/* Équipement rattaché à une fiche CERFA, s'il existe encore. */
+function equipDuCerfa(r, c){
+  if(!c || !c.equipId) return null;
+  var cli = clientDuRapport(r);
+  if(!cli || !cli.equip) return null;
+  return cli.equip.filter(function(e){ return e.id===c.equipId; })[0] || null;
+}
+
+/* Historique de charge d'un équipement : toutes les fiches qui le visent.
+   C'est ce lien qui permettra de voir qu'une machine est rechargée sans cesse. */
+async function historiqueEquip(equipId, saufRapportId){
+  if(!equipId) return [];
+  var out=[];
+  for(var i=0;i<ST.idx.length;i++){
+    var e=ST.idx[i];
+    if(saufRapportId && e.id===saufRapportId) continue;
+    var r=null;
+    try{ r=await sGet('r:'+e.id); }catch(ex){}
+    if(!r || !Array.isArray(r.cerfas)) continue;
+    r.cerfas.forEach(function(c){
+      if(c && c.active && c.equipId===equipId)
+        out.push({ref:r.ref, date:r.dateDebut||r.dateFin||'', site:r.site||'',
+                  chargee:c.chargee||'', fluide:c.fluideDenom||''});
+    });
+  }
+  return out.sort(function(a,b){ return String(b.date).localeCompare(String(a.date)); });
 }
 /* Fiche CERFA actuellement affichée */
 function cerfaCur(){
@@ -4317,6 +4400,7 @@ function goTab(k){
   }
   if(k==='cerfa'){
     setTimeout(initSigCerfa,60);
+    setTimeout(majLienEquip,80);
   }
 }
 
@@ -4560,6 +4644,7 @@ function panelCerfa(r){
       '<div class="fg">'+ftaC('Op\u00e9rateur (nom, adresse, SIRET)','op',c.op||CERFA_OP,3)+ftaC('D\u00e9tenteur (nom et adresse)','det',c.det,3)+'</div>'+
       '<div class="tear">[3] \u00c9quipement concern\u00e9</div>'+
       '<div class="fg">'+fldC('\u00c9quipement (id.)','equipIdent',c.equipIdent,{full:true,ph:'Marque, mod\u00e8le, n\u00b0 de s\u00e9rie'})+fldC('Fluide (obligatoire)','fluideDenom',c.fluideDenom,{ph:'R-410A'})+fldC('Charge totale kg','chargeTot',c.chargeTot)+fldC('Tonnage \u00e9q. CO2','tonnCO2',c.tonnCO2)+'</div>'+
+      '<div id="eq-lien" class="eq-lien"></div>'+
       '<div class="tear">[4] Nature de l\u2019intervention</div>'+
       '<div class="cl-cols"><div class="cl-col">'+
         cchk("Assemblage de l\u2019\u00e9quipement",P+'nature.assemblage',!!nat.assemblage)+
