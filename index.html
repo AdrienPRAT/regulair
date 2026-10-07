@@ -19,12 +19,24 @@
   --fm:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
 }
 *,*::before,*::after{box-sizing:border-box;}
-html,body{margin:0;padding:0;}
+html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden;}
 body{background:var(--bg);color:var(--ink);font-family:var(--fb);font-size:15px;line-height:1.5;min-height:100vh;}
 button{font-family:inherit;cursor:pointer;}
 input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 /* BAR */
-.bar{position:sticky;top:0;z-index:30;background:#fff;color:var(--ink);border-bottom:1.5px solid var(--line);display:flex;align-items:center;gap:12px;padding:12px 22px;}
+.bar{position:sticky;top:0;z-index:30;background:#fff;color:var(--ink);border-bottom:1.5px solid var(--line);display:flex;align-items:center;gap:12px;padding:12px 22px;max-width:100%;box-sizing:border-box;min-width:0;}
+.bar .brand{min-width:0;overflow:hidden;}
+.bar .brand img{flex:0 0 auto;}
+/* Écrans étroits : le logo rétrécit, les libellés s'effacent, les icônes restent.
+   Sans cela la barre mesurait 607 px dans un écran de 390 et décalait toute la page. */
+@media(max-width:620px){
+  .bar{gap:7px;padding:10px 12px;}
+  .bar .brand img{height:22px!important;margin-right:0!important;}
+  .bar .btn{padding-left:11px;padding-right:11px;}
+  .bar .btn .lbl{display:none;}
+  .bar .icon-btn{flex:0 0 auto;}
+}
+@media(max-width:380px){ .bar{gap:5px;padding:10px 9px;} }
 .brand{display:flex;align-items:center;font-family:var(--fm);font-weight:600;font-size:15px;color:#fff;}
 .spacer{flex:1;}
 /* BUTTONS */
@@ -204,6 +216,10 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .dz-hint{font-size:12px;color:var(--soft);margin:8px 0 0;font-style:italic;}
 .btn.sm[disabled]{opacity:.45;cursor:not-allowed;}
 .cflags{display:flex;gap:6px;flex-wrap:wrap;margin:-2px 0 2px;}
+.st-reserve{background:#FCF7E8;border:1.5px solid #E0D2A8;border-radius:10px;padding:12px 14px;
+  margin:0 0 16px;font-size:13px;color:#7A5F16;line-height:1.55;}
+.st-reserve .btn{margin-top:9px;}
+
 /* Actions du tableau de bord */
 .st-actions{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;}
 .st-actions .btn{flex:1 1 200px;justify-content:center;}
@@ -234,9 +250,8 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 @media(max-width:520px){ .sauv-bar{flex-wrap:wrap;} .sv-tx{flex:1 0 100%;} }
 
 /* Barre de filtres de l'accueil */
-.fbar{display:flex;gap:7px;overflow-x:auto;padding:0 0 12px;margin:-4px 0 0;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
-.fbar::-webkit-scrollbar{display:none;}
-.fchip{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+.fbar{display:flex;flex-wrap:wrap;gap:7px;padding:0 0 12px;margin:-4px 0 0;}
+.fchip{flex:0 0 auto;max-width:100%;display:inline-flex;align-items:center;gap:6px;cursor:pointer;
   font:inherit;font-size:12.5px;font-weight:600;color:var(--soft);
   background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 13px;
   white-space:nowrap;transition:background .12s,border-color .12s,color .12s;}
@@ -449,6 +464,8 @@ function icon(n,sz){
     trash:'<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
     copy:'<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1.5 1.5 0 0 1 1.5-1.5H15"/>',
     search:'<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/>',
+    chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    users:'<circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.2 2.7-5 6-5s6 1.8 6 5"/><path d="M16.5 6.4a3 3 0 0 1 0 5.2M18 14.3c2 .6 3.3 2.2 3.3 4.7"/>',
     save:'<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4M8 14h8v6H8z"/>',
     pdf:'<path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5"/><path d="M9 13h1.5a1.5 1.5 0 0 1 0 3H9v3M13.5 13v6h1.2a2.3 2.3 0 0 0 0-6zM18 13v6M18 16h2"/>',
     cam:'<path d="M4 7h3l1.5-2h7L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.4"/>',
@@ -855,7 +872,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1045';
+var VERSION = '2026.10.07-1115';
 
 async function verifierMaj(silencieux){
   try{
@@ -2986,10 +3003,16 @@ function renderStats(){
       '</div>'+
       (estBureau()
         ? '<div class="st-actions">'+
-            '<button class="btn ghost" id="st-registre">'+icon('pdf',15)+' Registre des fluides</button>'+
+            '<button class="btn ghost" id="st-registre">'+icon('chart',15)+' Registre des fluides</button>'+
             '<button class="btn ghost" id="st-export">'+icon('save',15)+' Export facturation</button>'+
           '</div>'
-        : '')+
+        /* Ne jamais masquer sans le dire : sinon on cherche un bouton qui
+           n'apparaîtra pas, sans savoir pourquoi. */
+        : '<p class="st-reserve">Le <strong>registre des fluides</strong> et l\u2019<strong>export facturation</strong> '+
+          'sont r\u00e9serv\u00e9s au r\u00f4le <strong>Bureau</strong>. '+
+          'Votre r\u00f4le actuel est <strong>Technicien</strong>\u00a0: changez-le dans R\u00e9glages '+
+          '\u2192 \u00c9quipe et synchronisation. '+
+          '<button class="btn ghost sm" id="st-role">Ouvrir les R\u00e9glages</button></p>')+
 
       '<div class="kpis">'+
         kpi(s.total,'intervention'+(s.total>1?'s':''),'amber')+
@@ -3039,6 +3062,8 @@ function renderStats(){
   if(brg) brg.onclick=function(){ ST.view='registre'; ST.regAnnee=null; renderApp(); };
   var bex=q('#st-export');
   if(bex) bex.onclick=fenetreExportFactu;
+  var brl=q('#st-role');
+  if(brl) brl.onclick=openCfg;
   qa('[data-per]').forEach(function(b){
     b.onclick=function(){ ST.statsPer=b.dataset.per; renderStats(); };
   });
@@ -3872,10 +3897,10 @@ function renderList(){
     '<div class="bar"><div class="brand"><img src="'+LOGO_B64+'" alt="REGUL\'AIR" style="height:30px;margin-right:10px;">Rapports</div>'+
     '<div class="spacer"></div>'+
     (SY.on?'<button class="icon-btn" id="b-sync" title="Synchroniser"><span id="sync-badge" class="sync-badge ok">\u2713</span></button>':'')+
-    '<button class="icon-btn" id="b-stats" title="Tableau de bord">'+icon('check',17)+'</button>'+
-    '<button class="btn ghost" id="b-clients">'+icon('copy',15)+' Clients</button>'+
-    '<button class="icon-btn" id="b-cfg">'+icon('cog')+'</button>'+
-    '<button class="btn amber" id="b-new">'+icon('plus',17)+' Nouveau rapport</button></div>'+
+    '<button class="icon-btn" id="b-stats" title="Tableau de bord" aria-label="Tableau de bord">'+icon('chart',17)+'</button>'+
+    '<button class="btn ghost" id="b-clients" title="Clients" aria-label="Clients">'+icon('users',16)+'<span class="lbl"> Clients</span></button>'+
+    '<button class="icon-btn" id="b-cfg" title="R\u00e9glages" aria-label="R\u00e9glages">'+icon('cog')+'</button>'+
+    '<button class="btn amber" id="b-new" title="Nouveau rapport">'+icon('plus',17)+'<span class="lbl"> Nouveau rapport</span></button></div>'+
     '<div class="page"><div class="toolbar">'+
     '<div class="sw">'+icon('search',15)+'<input id="sinp" placeholder="Rechercher\u2026" value="'+esc(ST.search)+'"></div>'+
     '</div>'+
