@@ -105,6 +105,9 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .rrow input{accent-color:var(--amber2);width:16px;height:16px;}
 /* CHECKLIST */
 .cl-list{display:flex;flex-direction:column;gap:3px;}
+.itype-autre{display:block;width:100%;box-sizing:border-box;margin:2px 0 4px 26px;max-width:calc(100% - 26px);
+  padding:7px 10px;border:1px solid var(--line);border-radius:7px;font:inherit;font-size:14px;background:#fff;}
+.itype-autre:focus{outline:none;border-color:var(--soft);}
 .cl-row{display:flex;align-items:center;gap:9px;padding:7px 2px;font-size:14px;cursor:pointer;}
 .cl-row input{accent-color:var(--amber2);width:16px;height:16px;flex-shrink:0;}
 .cl-cols{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-bottom:6px;}
@@ -213,6 +216,9 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .dz-step{font-size:12.5px;color:var(--soft);display:flex;align-items:center;gap:7px;}
 .dz-step.done{color:#1F6B36;font-weight:500;}
 .dz-tick{font-size:13px;}
+.dz-lien{display:block;margin-top:8px;background:transparent;border:0;padding:0;cursor:pointer;
+  font:inherit;font-size:12px;color:var(--soft);text-decoration:underline;text-underline-offset:2px;}
+.dz-lien:hover{color:var(--ink);}
 .dz-hint{font-size:12px;color:var(--soft);margin:8px 0 0;font-style:italic;}
 .btn.sm[disabled]{opacity:.45;cursor:not-allowed;}
 .cflags{display:flex;gap:6px;flex-wrap:wrap;margin:-2px 0 2px;}
@@ -585,13 +591,20 @@ function passeFiltre(e, k){
 function compteFiltre(k){
   return ST.idx.filter(visibleParMoi).filter(function(e){ return passeFiltre(e,k); }).length;
 }
-var TYPESI=['D\u00e9pannage','Visite de maintenance','Visite technique'];
+var TYPESI=['D\u00e9pannage','Visite de maintenance','Visite technique','Autre'];
 var NET=[
   {k:'filtres',l:'Nettoyage des filtres'},{k:'unites',l:'Nettoyage des unit\u00e9s'},
   {k:'evap',l:'Nettoyage des \u00e9vaporateurs'},{k:'cond',l:'Nettoyage des condenseurs'},
   {k:'bac',l:'Bac \u00e0 condensats'},{k:'pompes',l:'Pompes de relevages'},
   {k:'diff',l:'Diffuseurs et grilles de soufflage'},{k:'grilles',l:'Grilles de reprise'},
   {k:'bouches',l:"Bouches d'extraction"}
+];
+var PAC=[
+  {k:'filtreInt', l:'Nettoyage filtre \u00e0 eau interne'},
+  {k:'filtreExt', l:'Nettoyage filtre \u00e0 eau externe'},
+  {k:'vases',     l:'Contr\u00f4le de la pression de gonflage des vases d\u2019expansion avec regonflage si n\u00e9cessaire'},
+  {k:'filtreBcl', l:'V\u00e9rification et nettoyage du filtre sur la boucle d\u2019eau'},
+  {k:'pression',  l:'Contr\u00f4le de la pression d\u2019eau'}
 ];
 var CTR=[
   {k:'tension',l:'Tension et intensit\u00e9s'},{k:'pression',l:'Pression et temp\u00e9rature'},
@@ -622,14 +635,24 @@ function defCerfa(){
   };
 }
 
+/* « Autre » n'a de sens qu'accompagné de sa précision. */
+function libelleType(r){
+  var l = (r && r.typesI && r.typesI.length) ? r.typesI.join(', ') : '';
+  if(l==='Autre'){
+    var d = String(r.typeAutre||'').trim();
+    l = d ? 'Autre \u2014 '+d : 'Autre';
+  }
+  return l;
+}
+
 function defRapport(ref){
   return{
     id:uid(),ref:ref,
     dateDebut:today(),dateFin:today(),heureDebut:'',heureFin:'',
     intervenant:ST.cfg.tech||'',site:'',
-    typesI:[],statut:'R\u00e9solu',baseTemps:'reel',
+    typesI:[],typeAutre:'',statut:'R\u00e9solu',baseTemps:'reel',
     tempType:'soufflage',tempVal:'',
-    clN:{},clC:{},
+    clN:{},clC:{},clP:{},debitEau:'',
     descriptif:'',travaux:'',fournitures:'',obsClient:'',
     photos:[],sigTech:null,sigClient:null,nomClient:'',
     cerfas:[defCerfa()], cerfaIdx:0,
@@ -914,7 +937,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.14-1740';
+var VERSION = '2026.10.14-1845';
 
 async function verifierMaj(silencieux){
   try{
@@ -2007,6 +2030,128 @@ function choisirFeuille(buffer, feuilles){
 /* ═══════════════════ FICHIER CLIENTS ═══════════════════ */
 var CLIENTS = [];
 
+/* ═══════════ FICHES CLIENTS : ÉVITER LES DOUBLONS ═══════════ */
+
+/* Comparaison tolérante : accents, casse, ponctuation et espaces ignorés.
+   « SARL Durand-Fils » et « sarl durand fils » désignent le même client. */
+function normNom(x){
+  return String(x||'').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]/g,'');
+}
+function clientParNom(nom, saufId){
+  var k = normNom(nom);
+  if(!k) return null;
+  for(var i=0;i<CLIENTS.length;i++){
+    if(CLIENTS[i].id===saufId) continue;
+    if(normNom(CLIENTS[i].nom)===k) return CLIENTS[i];
+  }
+  return null;
+}
+
+/* Deux équipements se valent s'ils portent le même numéro de série, ou à
+   défaut la même désignation, marque et modèle. */
+function cleEquip(e){
+  var s = String(e.serie||'').trim();
+  if(s) return 'S'+normNom(s);
+  return 'D'+normNom([e.designation,e.marque,e.modele].join(' '));
+}
+
+/* Verse le contenu de `source` dans `cible` sans jamais écraser une valeur
+   déjà renseignée : on complète, on ne remplace pas. */
+function fusionnerClient(cible, source){
+  var rempli = [];
+  ['adresse','cp','ville','contact','email','tel'].forEach(function(ch){
+    if(!String(cible[ch]||'').trim() && String(source[ch]||'').trim()){
+      cible[ch] = source[ch]; rempli.push(ch);
+    }
+  });
+  var nSource = String(source.notes||'').trim();
+  if(nSource && String(cible.notes||'').indexOf(nSource)<0){
+    cible.notes = [String(cible.notes||'').trim(), nSource].filter(Boolean).join('\n');
+    rempli.push('notes');
+  }
+  cible.equip = cible.equip || [];
+  var vus = {};
+  cible.equip.forEach(function(e){ vus[cleEquip(e)] = e; });
+  var eqAjoutes = 0;
+  (source.equip||[]).forEach(function(e){
+    var k = cleEquip(e);
+    if(vus[k]){
+      /* Même machine : on complète ses champs vides. */
+      ['designation','marque','modele','serie','fluide','charge'].forEach(function(ch){
+        if(!String(vus[k][ch]||'').trim() && String(e[ch]||'').trim()) vus[k][ch]=e[ch];
+      });
+    } else {
+      cible.equip.push(e); vus[k]=e; eqAjoutes++;
+    }
+  });
+  cible.maj = Date.now();
+  return {champs:rempli.length, equipements:eqAjoutes};
+}
+
+/* Les rapports qui désignaient la fiche supprimée doivent suivre, sinon ils
+   perdent leur client et leur historique. */
+async function repointerRapports(ancienId, nouvelId){
+  var n = 0;
+  for(var i=0;i<ST.idx.length;i++){
+    var r = null;
+    try{ r = await sGet('r:'+ST.idx[i].id); }catch(e){}
+    if(!r || r.clientId!==ancienId) continue;
+    r.clientId = nouvelId;
+    r.updatedAt = Date.now();
+    try{ await sSet('r:'+r.id, r); }catch(e){}
+    ST.idx[i].clientId = nouvelId;
+    ST.idx[i].upd = r.updatedAt;
+    n++;
+  }
+  if(n){ try{ await sSet('idx', ST.idx); }catch(e){} }
+  return n;
+}
+
+/* Regroupe toutes les fiches de même nom sur la plus ancienne. */
+async function fusionnerDoublons(){
+  var groupes = {};
+  CLIENTS.forEach(function(c){
+    var k = normNom(c.nom);
+    if(!k) return;
+    (groupes[k] = groupes[k] || []).push(c);
+  });
+  var fiches = 0, rapports = 0, equipements = 0;
+  var aSupprimer = {};
+  for(var k in groupes){
+    var g = groupes[k];
+    if(g.length < 2) continue;
+    var garde = g[0];                       /* la première rencontrée fait référence */
+    for(var i=1;i<g.length;i++){
+      var res = fusionnerClient(garde, g[i]);
+      equipements += res.equipements;
+      rapports += await repointerRapports(g[i].id, garde.id);
+      aSupprimer[g[i].id] = true;
+      fiches++;
+    }
+  }
+  if(fiches){
+    for(var j=CLIENTS.length-1;j>=0;j--){
+      if(aSupprimer[CLIENTS[j].id]) CLIENTS.splice(j,1);
+    }
+    await saveClients();
+    if(SY.on){ try{ await pousserClients(CLIENTS); }catch(e){} }
+  }
+  return {fiches:fiches, rapports:rapports, equipements:equipements};
+}
+
+/* Nombre de fiches en trop, c'est-à-dire de fiches qui disparaîtront. */
+function compterDoublons(){
+  var vus = {}, n = 0;
+  CLIENTS.forEach(function(c){
+    var k = normNom(c.nom);
+    if(!k) return;
+    if(vus[k]) n++; else vus[k] = 1;
+  });
+  return n;
+}
+
 function defClient(){
   return {id:uid(), nom:'', adresse:'', cp:'', ville:'', contact:'', email:'', tel:'', notes:'', equip:[]};
 }
@@ -2037,11 +2182,34 @@ function renderClients(){
     '<div class="page">'+
       '<div class="toolbar"><div class="sw">'+icon('search',15)+
         '<input id="cl-search" placeholder="Rechercher un client, une ville\u2026" value="'+esc(ST.clSearch||'')+'"></div></div>'+
+      (function(){
+        var n = compterDoublons();
+        return n ? '<div class="sauv-bar" id="cl-dbl">'+
+          '<span class="sv-tx"><strong>'+n+' fiche(s) en double</strong>'+
+          '<span>M\u00eame nom sur plusieurs fiches. La fusion conserve tout : '+
+          'champs, \u00e9quipements et rapports li\u00e9s.</span></span>'+
+          '<button class="btn amber sm" id="cl-fusion">Fusionner</button></div>' : '';
+      })()+
       '<div id="cl-list"></div>'+
     '</div>';
   q('#cl-back').onclick=function(){ ST.view='list'; renderApp(); };
   q('#cl-new').onclick=function(){ editClient(defClient(), true); };
   q('#cl-import').onclick=importClientsCSV;
+  var bf=q('#cl-fusion');
+  if(bf) bf.onclick=function(){
+    doConfirm('Fusionner les doublons ?',
+      'Les fiches portant le m\u00eame nom seront regroup\u00e9es sur une seule. '+
+      'Aucune information n\u2019est perdue : les champs vides sont compl\u00e9t\u00e9s, '+
+      'les \u00e9quipements rassembl\u00e9s et les rapports rattach\u00e9s \u00e0 la fiche conserv\u00e9e.',
+      'Fusionner', async function(){
+        var r = await fusionnerDoublons();
+        toast(true, r.fiches
+          ? r.fiches+' fiche(s) fusionn\u00e9e(s), '+r.equipements+' \u00e9quipement(s) et '+
+            r.rapports+' rapport(s) rattach\u00e9s.'
+          : 'Aucun doublon trouv\u00e9.');
+        renderApp();
+      });
+  };
   q('#cl-search').oninput=function(e){ ST.clSearch=e.target.value; renderClientList(); };
   renderClientList();
 }
@@ -2098,7 +2266,8 @@ function editClient(c, isNew){
     '<div class="mbg" id="mbg"><div class="mbox" style="max-width:640px;max-height:90vh;overflow-y:auto;">'+
       '<h3>'+(isNew?'Nouveau client':'Fiche client')+'</h3>'+
       '<div class="fg">'+
-        '<div class="f full"><label>Nom / raison sociale</label><input type="text" id="c-nom" value="'+esc(c.nom||'')+'"></div>'+
+        '<div class="f full"><label>Nom / raison sociale</label><input type="text" id="c-nom" value="'+esc(c.nom||'')+'">'+
+          '<p class="cfg-hint" id="c-jumeau" style="margin:4px 0 0;"></p></div>'+
         '<div class="f full"><label>Adresse</label><input type="text" id="c-adr" value="'+esc(c.adresse||'')+'"></div>'+
         '<div class="f"><label>Code postal</label><input type="text" id="c-cp" value="'+esc(c.cp||'')+'"></div>'+
         '<div class="f"><label>Ville</label><input type="text" id="c-ville" value="'+esc(c.ville||'')+'"></div>'+
@@ -2137,6 +2306,18 @@ function editClient(c, isNew){
 
   q('#c-add-eq').onclick=function(){ work.push(defEquip()); refreshEq(); };
   q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
+  /* Prévenir pendant la frappe plutôt qu'au moment d'enregistrer. */
+  var inom=q('#c-nom'), ijum=q('#c-jumeau');
+  function verifJumeau(){
+    if(!inom||!ijum) return;
+    var j = clientParNom(inom.value, c.id);
+    ijum.innerHTML = j
+      ? '<span style="color:#8A6A1F;">\u26a0 <strong>'+esc(j.nom)+'</strong> existe d\u00e9j\u00e0. '+
+        'En enregistrant, sa fiche sera compl\u00e9t\u00e9e au lieu d\u2019\u00eatre dupliqu\u00e9e.</span>'
+      : '';
+  }
+  if(inom){ inom.addEventListener('input', verifJumeau); verifJumeau(); }
+
   q('#c-cancel').onclick=closeModal;
   q('#c-save').onclick=async function(){
     c.nom=q('#c-nom').value.trim();
@@ -2149,8 +2330,26 @@ function editClient(c, isNew){
     c.notes=q('#c-notes').value.trim();
     c.equip=work.filter(function(e){ return (e.designation||e.marque||e.serie||e.fluide); });
     if(!c.nom){ toast(false,'Le nom est obligatoire.'); return; }
+
+    /* Un client déjà connu ne doit pas donner naissance à une seconde fiche :
+       on complète la sienne. Les champs déjà renseignés sont préservés. */
+    var jumeau = clientParNom(c.nom, c.id);
+    if(jumeau){
+      var res = fusionnerClient(jumeau, c);
+      await saveClients();
+      if(SY.on){ try{ pousserClient(jumeau); }catch(e){} }
+      closeModal(); renderClientList();
+      toast(true, 'Fiche existante compl\u00e9t\u00e9e'+
+        (res.champs||res.equipements
+          ? ' ('+[res.champs?res.champs+' champ(s)':'', res.equipements?res.equipements+' \u00e9quipement(s)':'']
+              .filter(Boolean).join(', ')+').'
+          : ' \u2014 rien de nouveau \u00e0 ajouter.'));
+      return;
+    }
+
     if(isNew) CLIENTS.push(c);
     await saveClients();
+    if(SY.on){ try{ pousserClient(c); }catch(e){} }
     closeModal(); renderClientList();
     toast(true, isNew?'Client ajout\u00e9.':'Fiche mise \u00e0 jour.');
   };
@@ -2816,7 +3015,7 @@ async function genererExportFactu(selection){
       r.heureDebut||'', r.heureFin||'',
       dureeHeures(r), base,
       cli?cli.nom:'', r.site||'', r.intervenant||'',
-      (r.typesI||[]).join(' '),
+      libelleType(r),
       r.statut||'',
       (r.dossier==='cloture'?'Cloture':'En attente'),
       r.mailDate?fmtDate(r.mailDate.slice(0,10)):'',
@@ -3467,7 +3666,10 @@ function dossierHtml(r){
       (envoye ? 'Rapport envoy\u00e9'+(quand?' le '+quand:'')+(r.mailDest?' \u2014 '+esc(r.mailDest):'')
               : 'Rapport non encore envoy\u00e9 par mail')+
     '</div>'+
-    (envoye||clos ? '' : '<p class="dz-hint">La cl\u00f4ture sera possible une fois le rapport transmis par mail.</p>')+
+    (envoye
+      ? '<button class="dz-lien" id="dz-nonenvoye">Ce rapport n\u2019a pas \u00e9t\u00e9 transmis \u2014 corriger</button>'
+      : '<p class="dz-hint">La cl\u00f4ture sera possible une fois le rapport transmis par mail.</p>'+
+        '<button class="dz-lien" id="dz-dejaenvoye">D\u00e9j\u00e0 transmis\u00a0? Le marquer comme envoy\u00e9</button>')+
   '</div>';
 }
 
@@ -3479,6 +3681,32 @@ function refreshDossier(){
 }
 
 function bindDossier(){
+  /* Marquage manuel : un rapport transmis avant que l'application sache le
+     détecter, ou envoyé par un autre moyen, doit pouvoir être régularisé. */
+  var bde=q('#dz-dejaenvoye');
+  if(bde) bde.onclick=async function(){
+    var r=ST.cur;
+    r.mailEnvoye=true;
+    r.mailDate=r.mailDate||new Date().toISOString();
+    r.updatedAt=Date.now();
+    if(!isSuite(r) && r.dossier!=='cloture') r.dossier='cloture';
+    await save(false);
+    refreshDossier();
+    toast(true, r.dossier==='cloture'
+      ? 'Marqu\u00e9 comme envoy\u00e9 et cl\u00f4tur\u00e9.'
+      : 'Marqu\u00e9 comme envoy\u00e9.');
+  };
+  var bne=q('#dz-nonenvoye');
+  if(bne) bne.onclick=async function(){
+    var r=ST.cur;
+    r.mailEnvoye=false; r.mailDate=null; r.mailDest='';
+    r.dossier='attente';          /* la cl\u00f4ture supposait l'envoi */
+    r.updatedAt=Date.now();
+    await save(false);
+    refreshDossier();
+    toast(true,'Rapport remis en attente d\u2019envoi.');
+  };
+
   var bc=q('#dz-close');
   if(bc) bc.onclick=async function(){
     if(!ST.cur.mailEnvoye){ toast(false,'Envoyez d\u2019abord le rapport par mail.'); return; }
@@ -3581,7 +3809,7 @@ function corpsSuivi(r){
   if(r.site)        t+='Site : '+r.site+'\n';
   if(r.dateDebut)   t+='Date : '+fmtRange(r)+'\n';
   if(r.intervenant) t+='Technicien : '+r.intervenant+'\n';
-  if(r.typesI&&r.typesI.length) t+='Type : '+r.typesI.join(', ')+'\n';
+  if(libelleType(r)) t+='Type : '+libelleType(r)+'\n';
   t+='Statut : '+(r.statut||'')+'\n';
   t+='\n--- Travaux r\u00e9alis\u00e9s ---\n'+((r.descriptif||'').trim()||'(non renseign\u00e9)')+'\n';
   if((r.travaux||'').trim()) t+='\n--- Travaux \u00e0 r\u00e9aliser ---\n'+r.travaux.trim()+'\n';
@@ -3615,7 +3843,8 @@ async function envoyerSuivi(r, blob, fname, destOverride){
       ST.cur.updatedAt=r.updatedAt;
       if(clot) ST.cur.dossier='cloture';
     }
-    try{ await sSet('r:'+r.id,r); }catch(e){}
+    var ecrit = false;
+    try{ ecrit = await sSet('r:'+r.id,r); }catch(e){}
     var ix=ST.idx.findIndex(function(x){return x.id===r.id;});
     if(ix>=0){
       ST.idx[ix].mailEnvoye=true;
@@ -3625,6 +3854,21 @@ async function envoyerSuivi(r, blob, fname, destOverride){
     }
     if(q('#dossier-box')) refreshDossier();
     if(ST.view==='list') renderCards();
+
+    /* Si la mémoire de l'appareil est pleine, l'information serait perdue au
+       rechargement et le rapport repasserait « à envoyer ». On la met à l'abri
+       en ligne tout de suite, et on le dit. */
+    if(!ecrit){
+      var sauve = false;
+      if(SY.on){ try{ sauve = await pousserRapport(r); }catch(e){} }
+      diagSync('M\u00e9moire de l\u2019appareil pleine',
+        'L\u2019envoi a bien \u00e9t\u00e9 enregistr\u00e9'+
+        (sauve ? ' <strong>en ligne</strong>, il ne sera pas perdu.' : ', mais <strong>nulle part</strong>\u00a0: '+
+          'sans r\u00e9seau ni m\u00e9moire disponible, ce rapport repassera « \u00e0 envoyer ».')+
+        '<br><br>Faites une sauvegarde (R\u00e9glages \u2192 Sauvegarder), puis '+
+        '<strong>R\u00e9glages \u2192 Diagnostic \u2192 Lib\u00e9rer de la place</strong>.');
+      return;
+    }
     if(SY.on) setTimeout(function(){ synchroniser(true); }, 500);
   }
 
@@ -4273,7 +4517,7 @@ async function dupRapport(id){
   var c=JSON.parse(JSON.stringify(r));
   c.id=uid();c.ref=ref;c.dateDebut=today();c.dateFin=today();
   c.heureDebut='';c.heureFin='';c.statut='R\u00e9solu';
-  c.clN={};c.clC={};c.tempVal='';c.descriptif='';c.travaux='';c.fournitures='';c.obsClient='';
+  c.clN={};c.clC={};c.clP={};c.debitEau='';c.tempVal='';c.descriptif='';c.travaux='';c.fournitures='';c.obsClient='';
   c.photos=[];c.sigTech=null;c.sigClient=null;c.nomClient='';
   c.cerfas=[defCerfa()];c.cerfaIdx=0;delete c.cerfa;c.createdAt=Date.now();c.updatedAt=Date.now();
   ST.cur=c;ST.tab='info';ST.view='form';renderApp();
@@ -4456,6 +4700,7 @@ function renderForm(){
 
   /* délégation input */
   q('#pw').addEventListener('input',function(e){
+    if(e.target.id==='itype-autre'){ ST.cur.typeAutre=e.target.value; return; }
     var f=e.target.dataset.f;
     if(!f)return;
     deepSet(ST.cur,f,e.target.value);
@@ -4513,6 +4758,12 @@ function renderForm(){
     if(t.dataset.itype!==undefined){
       /* Un seul type d'intervention à la fois */
       ST.cur.typesI = t.checked ? [t.dataset.itype] : [];
+      var za=q('#itype-autre');
+      if(za){
+        var autre = t.checked && t.dataset.itype==='Autre';
+        za.style.display = autre ? '' : 'none';
+        if(autre) za.focus(); else { ST.cur.typeAutre=''; za.value=''; }
+      }
     } else if(t.dataset.chk){
       deepSet(ST.cur,t.dataset.chk,t.checked);
       if(/^cerfas\.\d+\.active$/.test(t.dataset.chk)){
@@ -4585,7 +4836,13 @@ function panelInfo(r){
     '</div>'+
     '<div class="f full" style="margin-top:10px;">'+
       '<label>Type d\'intervention</label>'+
-      '<div class="cl-list">'+TYPESI.map(function(t){return'<label class="cl-row"><input type="radio" name="itype" data-itype="'+esc(t)+'" '+((r.typesI||[]).indexOf(t)>=0?'checked':'')+'>'+esc(t)+'</label>';}).join('')+'</div>'+
+      '<div class="cl-list">'+TYPESI.map(function(t){
+        var coche=(r.typesI||[]).indexOf(t)>=0;
+        var ligne='<label class="cl-row"><input type="radio" name="itype" data-itype="'+esc(t)+'" '+(coche?'checked':'')+'>'+esc(t)+'</label>';
+        if(t==='Autre') ligne+='<input type="text" id="itype-autre" class="itype-autre" placeholder="Pr\u00e9cisez" '+
+          'value="'+esc(r.typeAutre||'')+'"'+(coche?'':' style="display:none;"')+'>';
+        return ligne;
+      }).join('')+'</div>'+
     '</div>'+
     '<div class="f full" style="margin-top:14px;">'+
       '<label>Temps pass\u00e9</label>'+
@@ -4617,6 +4874,16 @@ function panelCheck(r){
       '</div>'+
       '<div class="cl-col"><h4>Contr\u00f4le</h4>'+
         CTR.map(function(it){return'<label class="cl-item"><input type="checkbox" data-chk="clC.'+it.k+'" '+((r.clC&&r.clC[it.k])?'checked':'')+'>'+esc(it.l)+'</label>';}).join('')+
+      '</div>'+
+    '</div>'+
+    '<div class="tear">PAC air / eau</div>'+
+    '<div class="cl-cols">'+
+      '<div class="cl-col">'+
+        PAC.map(function(it){return'<label class="cl-item"><input type="checkbox" data-chk="clP.'+it.k+'" '+((r.clP&&r.clP[it.k])?'checked':'')+'>'+esc(it.l)+'</label>';}).join('')+
+      '</div>'+
+      '<div class="cl-col">'+
+        '<div class="f" style="max-width:260px;"><label>D\u00e9bit d\u2019eau circuit ferm\u00e9 (L/min)</label>'+
+        '<input type="number" inputmode="decimal" step="0.1" data-f="debitEau" value="'+esc(r.debitEau||'')+'" placeholder="0.0"></div>'+
       '</div>'+
     '</div>'+
     '<div class="tear">Relev\u00e9 de temp\u00e9rature</div>'+
@@ -5056,7 +5323,7 @@ function buildPdf(report){
 
   /* ── Identification ── */
   var HW=(CW-8)/2,sy=y;
-  var leftF=[['Site',report.site],['Technicien',report.intervenant],['Type',(report.typesI&&report.typesI.length?report.typesI.join(', '):'\u2014')]];
+  var leftF=[['Site',report.site],['Technicien',report.intervenant],['Type',libelleType(report)||'\u2014']];
   var rightF=[['Statut',report.statut],['Date',fmtRange(report)],['Temps pass\u00e9',durée(report)||'\u2014']];
   function drawCol(fields,x){var cy=sy;fields.forEach(function(f){doc.setFont('helvetica','bold');doc.setFontSize(7.5);doc.setTextColor(107,115,120);doc.text(f[0].toUpperCase(),x,cy);doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(38,47,51);var ls=doc.splitTextToSize(f[1]||'\u2014',HW);doc.text(ls,x,cy+4.5);cy+=4.5+ls.length*4.8+3;});return cy;}
   var ly=drawCol(leftF,M),ry=drawCol(rightF,M+HW+8);
@@ -5079,6 +5346,32 @@ function buildPdf(report){
   }
   var nl=drawCL('Nettoyage',NET,report.clN,M),nr=drawCL('Contr\u00f4le',CTR,report.clC,M+cc+10);
   y=Math.max(nl,nr)+4;
+
+  /* PAC air / eau : libellés longs, donc pleine largeur plutôt que deux colonnes.
+     La section ne s'imprime que si elle a été renseignée. */
+  var pacCoche = PAC.some(function(it){ return report.clP && report.clP[it.k]; });
+  if(pacCoche || String(report.debitEau||'').trim()){
+    need(10);
+    doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(38,47,51);
+    doc.text('PAC AIR / EAU',M,y);
+    doc.setDrawColor(220,209,176);doc.setLineWidth(.4);doc.line(M,y+2,M+CW,y+2);
+    y+=7;
+    PAC.forEach(function(it){
+      var ls=doc.splitTextToSize(it.l,CW-7);
+      need(Math.max(5,ls.length*4+1));
+      chkb(M,y,!!(report.clP&&report.clP[it.k]));
+      doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(38,47,51);
+      doc.text(ls,M+6,y);
+      y+=Math.max(5,ls.length*4+.5);
+    });
+    if(String(report.debitEau||'').trim()){
+      need(7);
+      doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(38,47,51);
+      doc.text('D\u00e9bit d\u2019eau circuit ferm\u00e9 : '+report.debitEau+' L/min',M,y+1);
+      y+=6;
+    }
+    y+=3;
+  }
   if(report.tempVal){
     doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(38,47,51);
     doc.text((report.tempType==='eau'?"Temp\u00e9rature d\u00e9part d'eau":'Temp\u00e9rature de soufflage')+' : '+report.tempVal+' \u00b0C',M,y);
