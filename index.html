@@ -513,7 +513,11 @@ async function sSet(k,v){
     }
   }
   MEM[k]=v;
-  return ok || true;
+  /* Dire la vérité : « ok || true » masquait tout échec d'écriture, et un
+     rapport reçu mais non enregistré devenait « introuvable » au rechargement.
+     Sans aucun stockage durable (environnement de test), on n'alerte pas. */
+  var durable = HS || LS;
+  return durable ? ok : true;
 }
 async function sDel(k){
   if(HS){ try{ await window.storage.delete(k,false); }catch(e){} }
@@ -910,7 +914,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.07-1320';
+var VERSION = '2026.10.14-1740';
 
 async function verifierMaj(silencieux){
   try{
@@ -1240,6 +1244,33 @@ async function diagnostic(){
   ajouter('info','Derni\u00e8re synchronisation',
     SY.last ? new Date(SY.last).toLocaleString('fr-FR') : 'jamais');
 
+  /* État de la mémoire du navigateur : c'est elle qui lâche en premier
+     sur téléphone, et son échec était jusqu'ici silencieux. */
+  try{
+    var octets = 0;
+    for(var ci=0; ci<localStorage.length; ci++){
+      var cle = localStorage.key(ci);
+      if(cle && cle.indexOf(PFX)===0) octets += cle.length + (localStorage.getItem(cle)||'').length;
+    }
+    var mo = Math.round(octets/104857.6)/10;     /* en Mo, une décimale */
+    /* Test réel : seule une écriture dit si la place existe encore. */
+    var place = true;
+    try{
+      var bourre = new Array(120000).join('x');   /* ~120 Ko */
+      localStorage.setItem(PFX+'__essai', bourre);
+      localStorage.removeItem(PFX+'__essai');
+    }catch(ex){ place = false; }
+    if(place)
+      ajouter('ok','M\u00e9moire de l\u2019appareil', mo+' Mo utilis\u00e9s \u2014 il reste de la place.');
+    else
+      ajouter('ko','M\u00e9moire pleine',
+        mo+' Mo utilis\u00e9s, et plus aucune \u00e9criture n\u2019est possible.<br>'+
+        'Les rapports re\u00e7us ne peuvent plus \u00eatre enregistr\u00e9s. '+
+        'Faites une sauvegarde (R\u00e9glages \u2192 Sauvegarder) puis supprimez d\u2019anciens rapports.');
+  }catch(e){
+    ajouter('att','M\u00e9moire de l\u2019appareil','\u00c9tat non mesurable sur ce navigateur.');
+  }
+
   /* Références en double : vestiges du compteur local d'avant correction. */
   var dbl = refsEnDouble();
   if(dbl.length)
@@ -1265,9 +1296,20 @@ async function diagnostic(){
   if(act){
     act.innerHTML =
       '<button class="btn ghost" id="dg-close2">Fermer</button>'+
+      '<button class="btn ghost" id="dg-place">Lib\u00e9rer de la place</button>'+
       '<button class="btn amber" id="dg-force" style="flex:1;justify-content:center;">'+
         icon('save',14)+' Tout récupérer et tout renvoyer</button>';
     q('#dg-close2').onclick=closeModal;
+    q('#dg-place').onclick=async function(){
+      var bp=q('#dg-place');
+      if(bp){ bp.disabled=true; bp.textContent='Nettoyage\u2026'; }
+      var res = await libererPlace();
+      if(bp){ bp.disabled=false; bp.textContent='Lib\u00e9rer de la place'; }
+      toast(true, res.n
+        ? res.mo+' Mo lib\u00e9r\u00e9s sur '+res.n+' rapport(s).'
+        : 'Rien \u00e0 lib\u00e9rer : aucune image en double.');
+      diagnostic();
+    };
     q('#dg-force').onclick=async function(){
       var b=q('#dg-force');
       if(b){ b.disabled=true; b.textContent='Envoi en cours\u2026'; }
@@ -1613,7 +1655,20 @@ async function synchroniser(silencieux){
             if(anc && anc.dataUrl) p.dataUrl = anc.dataUrl;
           });
         }
-        await sSet('r:'+dist.id, dist);
+        /* Une image déjà déposée en ligne n'a pas à occuper la mémoire du
+           téléphone : six photos pesaient plus que tout le quota disponible.
+           Elle sera retéléchargée au moment d'imprimer. */
+        if(dist.photos) dist.photos.forEach(function(p){
+          if(p.url && p.dataUrl) delete p.dataUrl;
+        });
+        var ecrit = await sSet('r:'+dist.id, dist);
+        if(!ecrit){
+          /* Ne pas inscrire dans la liste ce qu'on n'a pas pu enregistrer :
+             le rapport s'afficherait puis serait introuvable. */
+          noter('Non enregistr\u00e9 (m\u00e9moire pleine)', dist.ref||dist.id);
+          erreurs++;
+          continue;
+        }
         var idx = ST.idx.findIndex(function(x){ return x.id===dist.id; });
         var ent = {id:dist.id, ref:dist.ref, site:dist.site||'', statut:dist.statut,
                    dateDebut:dist.dateDebut, dateFin:dist.dateFin, upd:dist.updatedAt||Date.now(),
@@ -2641,8 +2696,8 @@ function bindHistorique(){
 
 /* Aperçu détaillé d'une intervention passée, sans quitter le rapport */
 async function apercuHisto(id){
-  var r=await sGet('r:'+id);
-  if(!r){ toast(false,'Rapport introuvable.'); return; }
+  var r=await lireRapport(id);
+  if(!r){ messageIntrouvable(); return; }
   q('#modal').innerHTML=
     '<div class="mbg" id="mbg"><div class="mbox sm">'+
       '<h3>'+esc(r.ref||'')+'</h3>'+
@@ -4154,15 +4209,66 @@ function refsEnDouble(){
   });
   return Object.keys(dbl).map(function(k){ return {ref:k, n:dbl[k]}; });
 }
+/* Lit un rapport, et s'il manque localement, va le rechercher dans la base.
+   C'est le cas d'un appareil dont la mémoire était pleine au moment de la
+   réception : la fiche figurait dans la liste sans exister sur l'appareil. */
+async function lireRapport(id){
+  var r = await sGet('r:'+id);
+  if(r) return r;
+  if(!SY.on) return null;
+  try{
+    toast(true,'R\u00e9cup\u00e9ration du rapport\u2026');
+    var rep = await fetch(apiURL('rapports?id=eq.'+encodeURIComponent(id)+'&select=contenu'),
+                          {headers:apiHead()});
+    if(!rep.ok) return null;
+    var l = await rep.json();
+    var d = (l && l[0] && l[0].contenu) ? l[0].contenu : null;
+    if(!d || !d.id) return null;
+    if(d.photos) d.photos.forEach(function(p){ if(p.url && p.dataUrl) delete p.dataUrl; });
+    await sSet('r:'+d.id, d);          /* peut échouer : on rend quand même la fiche */
+    return d;
+  }catch(e){ return null; }
+}
+
+/* Récupère la place prise par les images déjà déposées en ligne : elles sont
+   retéléchargées au moment d'imprimer, inutile de les garder sur l'appareil.
+   Une image non encore transmise est conservée : elle n'existe nulle part ailleurs. */
+async function libererPlace(){
+  var liberes = 0, touches = 0;
+  for(var i=0;i<ST.idx.length;i++){
+    var r = null;
+    try{ r = await sGet('r:'+ST.idx[i].id); }catch(e){}
+    if(!r || !r.photos || !r.photos.length) continue;
+    var gain = 0;
+    r.photos.forEach(function(ph){
+      if(ph.url && ph.dataUrl){ gain += String(ph.dataUrl).length; delete ph.dataUrl; }
+    });
+    if(!gain) continue;
+    try{ await sSet('r:'+r.id, r); liberes += gain; touches++; }catch(e){}
+  }
+  return {mo: Math.round(liberes/104857.6)/10, n: touches};
+}
+
+function messageIntrouvable(){
+  diagSync('Rapport indisponible',
+    'Ce rapport n\u2019est pas sur cet appareil et n\u2019a pas pu \u00eatre r\u00e9cup\u00e9r\u00e9.<br><br>'+
+    'Causes possibles\u00a0:<br>'+
+    '\u2022 pas de r\u00e9seau pour aller le chercher\u00a0;<br>'+
+    '\u2022 la m\u00e9moire de l\u2019appareil est pleine \u2014 faites une sauvegarde puis supprimez d\u2019anciens rapports\u00a0;<br>'+
+    '\u2022 il n\u2019a jamais \u00e9t\u00e9 transmis depuis le t\u00e9l\u00e9phone qui l\u2019a r\u00e9dig\u00e9.<br><br>'+
+    'Le diagnostic (R\u00e9glages \u2192 \u00c9quipe et synchronisation) indique l\u2019\u00e9tat de la m\u00e9moire.');
+}
+
 async function createRapport(){var ref=await nextRef();ST.cur=defRapport(ref);ST.tab='info';ST.view='form';renderApp();}
 async function openRapport(id){
-  var r=await sGet('r:'+id);
-  if(!r){toast(false,'Rapport introuvable.');return;}
+  var r=await lireRapport(id);
+  if(!r){ messageIntrouvable(); return; }
   migreCerfas(r);
   ST.cur=r;ST.tab='info';ST.view='form';renderApp();
 }
 async function dupRapport(id){
-  var r=await sGet('r:'+id);if(!r){toast(false,'Rapport introuvable.');return;}
+  var r=await lireRapport(id);
+  if(!r){ messageIntrouvable(); return; }
   var ref=await nextRef();
   var c=JSON.parse(JSON.stringify(r));
   c.id=uid();c.ref=ref;c.dateDebut=today();c.dateFin=today();
@@ -4777,8 +4883,8 @@ function bindClr(){
 
 /* ===== PDF ===== */
 async function mailRapport(id, rapportObj){
-  var r = rapportObj || await sGet('r:'+id);
-  if(!r){ toast(false,'Rapport introuvable.'); return; }
+  var r = rapportObj || await lireRapport(id);
+  if(!r){ messageIntrouvable(); return; }
   if(!window.jspdf){
     toast(true,'Pr\u00e9paration du PDF\u2026');
     var okLib = await ensureLib();
@@ -4818,11 +4924,24 @@ async function handlePdf(){
   if(miss.length){
     if(typeof miss[0].cerfa==='number' && miss[0].cerfa>=0) r.cerfaIdx=miss[0].cerfa;
     goTab(miss[0].t);
-    toast(false,'Manquant : '+miss.map(function(m){return m.l;}).join(', ')+'.');
+    /* Une bulle en bas de l'écran passe inaperçue au moment où l'on appuie
+       sur « Générer » : on bloque avec un message qu'il faut refermer. */
+    diagSync('Rapport incomplet',
+      'Le PDF ne peut pas \u00eatre produit tant qu\u2019il manque\u00a0:<br><br>'+
+      '<ul style="margin:0 0 0 18px;padding:0;">'+
+      miss.map(function(m){ return '<li>'+esc(m.l)+'</li>'; }).join('')+
+      '</ul><br>Vous avez \u00e9t\u00e9 amen\u00e9 \u00e0 l\u2019onglet concern\u00e9.');
     return;
   }
   if(!window.jspdf){ toast(true,'Pr\u00e9paration du PDF\u2026'); var okLib=await ensureLib(); if(!okLib){toast(false,'Biblioth\u00e8que PDF indisponible. Connectez-vous une fois \u00e0 Internet.');return;} }
-  await save(false);
+  var enregistre = await save(false);
+  if(!enregistre){
+    diagSync('Enregistrement impossible',
+      'Le rapport n\u2019a pas pu \u00eatre enregistr\u00e9 sur cet appareil, le PDF n\u2019a donc pas \u00e9t\u00e9 produit.<br><br>'+
+      'La m\u00e9moire du navigateur est probablement pleine. Faites une sauvegarde '+
+      '(R\u00e9glages \u2192 Sauvegarder), supprimez quelques anciens rapports, puis recommencez.');
+    return;
+  }
   if(SY.on) { try{ await completerPhotos(r); }catch(e){} }
   try{
     var doc=buildPdf(r);
@@ -4832,7 +4951,13 @@ async function handlePdf(){
     showPreview(url,fname,r,blob);
     toast(true,'PDF g\u00e9n\u00e9r\u00e9.');
     /* L'envoi se déclenche depuis l'aperçu, pour laisser le temps de vérifier */
-  }catch(e){console.error(e);toast(false,'Erreur lors de la g\u00e9n\u00e9ration du PDF.');}
+  }catch(e){
+    console.error(e);
+    diagSync('\u00c9chec de la g\u00e9n\u00e9ration du PDF',
+      'Le document n\u2019a pas pu \u00eatre produit.<br><br><code>'+
+      esc(String(e && e.message || e))+'</code><br><br>'+
+      'Transmettez ce message si le probl\u00e8me se r\u00e9p\u00e8te.');
+  }
 }
 
 function showPreview(url,fname,rapport,blob){
