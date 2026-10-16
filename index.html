@@ -635,11 +635,21 @@ var NET=[
   {k:'bouches',l:"Bouches d'extraction"}
 ];
 var PAC=[
-  {k:'filtreInt', l:'Nettoyage filtre \u00e0 eau interne'},
-  {k:'filtreExt', l:'Nettoyage filtre \u00e0 eau externe'},
+  {k:'filtres',   l:'Nettoyage des filtres \u00e0 eau'},
   {k:'vases',     l:'Contr\u00f4le de la pression de gonflage des vases d\u2019expansion avec regonflage si n\u00e9cessaire'},
   {k:'filtreBcl', l:'V\u00e9rification et nettoyage du filtre sur la boucle d\u2019eau'},
-  {k:'pression',  l:'Contr\u00f4le de la pression d\u2019eau'}
+  {k:'pression',  l:'Contr\u00f4le de la pression d\u2019eau'},
+  {k:'vanneMel',  l:'Test vanne de m\u00e9lange'},
+  {k:'vanne3v',   l:'Test vanne 3 voies'},
+  {k:'circulateur', l:'Test circulateur'}
+];
+
+/* Relevés chiffrés de la partie PAC air / eau. */
+var PAC_DEBITS=[
+  {k:'debitEau',     l:'D\u00e9bit d\u2019eau circuit ferm\u00e9'},
+  {k:'debitChauf',   l:'D\u00e9bit chauffage'},
+  {k:'debitECS',     l:'D\u00e9bit ECS'},
+  {k:'debitAppoint', l:'D\u00e9bit chauffage d\u2019appoint'}
 ];
 var CTR=[
   {k:'tension',l:'Tension et intensit\u00e9s'},{k:'pression',l:'Pression et temp\u00e9rature'},
@@ -687,7 +697,7 @@ function defRapport(ref){
     intervenant:ST.cfg.tech||'',site:'',
     typesI:[],typeAutre:'',statut:'R\u00e9solu',baseTemps:'reel',
     tempType:'soufflage',tempVal:'',
-    clN:{},clC:{},clP:{},debitEau:'',
+    clN:{},clC:{},clP:{},debitEau:'',debitChauf:'',debitECS:'',debitAppoint:'',
     descriptif:'',travaux:'',fournitures:'',obsClient:'',
     photos:[],sigTech:null,sigClient:null,nomClient:'',
     cerfas:[defCerfa()], cerfaIdx:0,
@@ -992,7 +1002,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1730';
+var VERSION = '2026.10.16-1900';
 
 async function verifierMaj(silencieux){
   try{
@@ -2805,6 +2815,10 @@ function migreCerfas(r){
   }
   if(!r.cerfas.length) r.cerfas=[defCerfa()];
   if(typeof r.cerfaIdx!=='number' || r.cerfaIdx>=r.cerfas.length) r.cerfaIdx=0;
+  /* Les deux filtres à eau n'en font plus qu'un : une coche sur l'ancien
+     « interne » ou « externe » vaut coche sur le nouveau libellé. */
+  if(r.clP && !r.clP.filtres && (r.clP.filtreInt || r.clP.filtreExt)) r.clP.filtres = true;
+
   /* Rattrapage des fiches antérieures : on retrouve l'équipement par son
      libellé, une fois, puis le lien tient tout seul. */
   var cli = null, cherche = false;
@@ -4797,7 +4811,7 @@ async function dupRapport(id){
   var c=JSON.parse(JSON.stringify(r));
   c.id=uid();c.ref=ref;c.dateDebut=today();c.dateFin=today();
   c.heureDebut='';c.heureFin='';c.statut='R\u00e9solu';
-  c.clN={};c.clC={};c.clP={};c.debitEau='';c.tempVal='';c.descriptif='';c.travaux='';c.fournitures='';c.obsClient='';
+  c.clN={};c.clC={};c.clP={};c.debitEau='';c.debitChauf='';c.debitECS='';c.debitAppoint='';c.tempVal='';c.descriptif='';c.travaux='';c.fournitures='';c.obsClient='';
   c.photos=[];c.sigTech=null;c.sigClient=null;c.nomClient='';
   c.cerfas=[defCerfa()];c.cerfaIdx=0;delete c.cerfa;c.createdAt=Date.now();c.updatedAt=Date.now();
   ST.cur=c;ST.tab='info';ST.view='form';renderApp();
@@ -5162,8 +5176,11 @@ function panelCheck(r){
         PAC.map(function(it){return'<label class="cl-item"><input type="checkbox" data-chk="clP.'+it.k+'" '+((r.clP&&r.clP[it.k])?'checked':'')+'>'+esc(it.l)+'</label>';}).join('')+
       '</div>'+
       '<div class="cl-col">'+
-        '<div class="f" style="max-width:260px;"><label>D\u00e9bit d\u2019eau circuit ferm\u00e9 (L/min)</label>'+
-        '<input type="number" inputmode="decimal" step="0.1" data-f="debitEau" value="'+esc(r.debitEau||'')+'" placeholder="0.0"></div>'+
+        PAC_DEBITS.map(function(d){
+          return '<div class="f" style="max-width:260px;margin-bottom:10px;"><label>'+d.l+' (L/min)</label>'+
+            '<input type="number" inputmode="decimal" step="0.1" data-f="'+d.k+'" '+
+            'value="'+esc(r[d.k]||'')+'" placeholder="0.0"></div>';
+        }).join('')+
       '</div>'+
     '</div>'+
     '<div class="tear">Relev\u00e9 de temp\u00e9rature</div>'+
@@ -5637,27 +5654,28 @@ function buildPdf(report){
 
   /* PAC air / eau : libellés longs, donc pleine largeur plutôt que deux colonnes.
      La section ne s'imprime que si elle a été renseignée. */
-  var pacCoche = PAC.some(function(it){ return report.clP && report.clP[it.k]; });
-  if(pacCoche || String(report.debitEau||'').trim()){
+  var pacCochees = PAC.filter(function(it){ return report.clP && report.clP[it.k]; });
+  var debitsRenseignes = PAC_DEBITS.filter(function(d){ return String(report[d.k]||'').trim(); });
+  if(pacCochees.length || debitsRenseignes.length){
     need(10);
     doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(38,47,51);
     doc.text('PAC AIR / EAU',M,y);
     doc.setDrawColor(220,209,176);doc.setLineWidth(.4);doc.line(M,y+2,M+CW,y+2);
     y+=7;
-    PAC.forEach(function(it){
+    pacCochees.forEach(function(it){
       var ls=doc.splitTextToSize(it.l,CW-7);
       need(Math.max(5,ls.length*4+1));
-      chkb(M,y,!!(report.clP&&report.clP[it.k]));
+      chkb(M,y,true);
       doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(38,47,51);
       doc.text(ls,M+6,y);
       y+=Math.max(5,ls.length*4+.5);
     });
-    if(String(report.debitEau||'').trim()){
-      need(7);
+    debitsRenseignes.forEach(function(d){
+      need(6);
       doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(38,47,51);
-      doc.text('D\u00e9bit d\u2019eau circuit ferm\u00e9 : '+report.debitEau+' L/min',M,y+1);
-      y+=6;
-    }
+      doc.text(d.l+' : '+report[d.k]+' L/min',M,y+1);
+      y+=5.5;
+    });
     y+=3;
   }
   if(report.tempVal){
