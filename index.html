@@ -967,7 +967,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1430';
+var VERSION = '2026.10.16-1500';
 
 async function verifierMaj(silencieux){
   try{
@@ -1389,6 +1389,11 @@ var CFG_KEY = 'sb_publishable_W-rDEVFtbz9-L094APfcRg_-AisyyO-';
 /* Clé de secours : Supabase accepte selon les projets l'ancien format
    (eyJ...) ou le nouveau (sb_publishable_...). Si la clé ci-dessus est
    refusée, l'application essaie celle-ci et retient celle qui marche. */
+/* Empreinte du code d'accès au rôle Bureau. Vide = aucun code demandé.
+   Ce n'est pas le code lui-même : on ne peut pas le relire ici.
+   Pour le définir : R\u00e9glages \u2192 D\u00e9finir le code d'acc\u00e8s (en r\u00f4le Bureau). */
+var CFG_CODE_BUREAU = '';
+
 var CFG_KEY_ALT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzdHFub2VqaWpmaHp0aHpucWNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3ODg0NDUsImV4cCI6MjEwNDM2NDQ0NX0.PyWuwzEoAjeq9OlZAnnRM_WMqpYEpW7u5qg9HXorDxw';
 
 var SY = {url:'', key:'', user:'', role:'technicien', last:0, on:false, busy:false};
@@ -1813,6 +1818,103 @@ function majBadgeSync(etat){
 
 /* Le registre des fluides et l'export de facturation relèvent du bureau.
    Hors synchronisation, l'application est mono-poste : pas de rôle à faire valoir. */
+/* Empreinte SHA-256, pour ne jamais stocker le code en clair. */
+async function empreinte(txt){
+  var d = new TextEncoder().encode(String(txt||''));
+  var h = await crypto.subtle.digest('SHA-256', d);
+  return Array.from(new Uint8Array(h)).map(function(b){
+    return b.toString(16).padStart(2,'0');
+  }).join('');
+}
+function codeBureauExige(){ return !!String(CFG_CODE_BUREAU||'').trim(); }
+
+/* Demande le code et n'accorde le rôle Bureau qu'en cas de concordance. */
+function demanderCodeBureau(){
+  return new Promise(function(resoudre){
+    q('#modal').innerHTML=
+      '<div class="mbg" id="mbg"><div class="mbox sm">'+
+        '<h3>Code d\u2019acc\u00e8s Bureau</h3>'+
+        '<p class="cfg-hint" style="margin-bottom:12px;">Le r\u00f4le Bureau donne acc\u00e8s \u00e0 tous les '+
+        'rapports, \u00e0 la sauvegarde compl\u00e8te et au fichier client.</p>'+
+        '<div class="f" style="margin-bottom:6px;"><label>Code</label>'+
+          '<input type="password" id="cb-code" inputmode="numeric" autocomplete="off"></div>'+
+        '<p class="cfg-hint" id="cb-err" style="color:var(--rust);min-height:16px;"></p>'+
+        '<div class="mact">'+
+          '<button class="btn ghost" id="cb-non">Annuler</button>'+
+          '<button class="btn amber" id="cb-oui">Valider</button>'+
+        '</div>'+
+      '</div></div>';
+    var inp=q('#cb-code'); if(inp) setTimeout(function(){ inp.focus(); },80);
+    function fini(ok){ closeModal(); resoudre(ok); }
+    q('#cb-non').onclick=function(){ fini(false); };
+    async function verifier(){
+      var saisi = (q('#cb-code')||{}).value || '';
+      var e = await empreinte(saisi);
+      if(e === String(CFG_CODE_BUREAU).trim().toLowerCase()) fini(true);
+      else { var z=q('#cb-err'); if(z) z.textContent='Code incorrect.';
+             var i2=q('#cb-code'); if(i2){ i2.value=''; i2.focus(); } }
+    }
+    q('#cb-oui').onclick=verifier;
+    if(inp) inp.onkeydown=function(ev){ if(ev.key==='Enter'){ ev.preventDefault(); verifier(); } };
+    q('#mbg').onclick=function(ev){ if(ev.target.id==='mbg') fini(false); };
+  });
+}
+
+/* Rôle demandé depuis les Réglages : le passage en Bureau est contrôlé. */
+async function roleAutorise(demande){
+  if(demande!=='bureau') return demande;
+  if(SY.role==='bureau') return 'bureau';      /* déjà accordé */
+  if(!codeBureauExige()) return 'bureau';      /* aucun code configuré */
+  var ok = await demanderCodeBureau();
+  if(!ok) toast(false,'R\u00f4le inchang\u00e9.');
+  return ok ? 'bureau' : 'technicien';
+}
+
+/* Le code n'est jamais écrit en clair : l'application calcule son empreinte
+   et affiche la ligne à coller dans le fichier. Rien à nous transmettre. */
+function fenetreDefinirCode(){
+  q('#modal').innerHTML=
+    '<div class="mbg" id="mbg"><div class="mbox sm">'+
+      '<h3>Code d\u2019acc\u00e8s Bureau</h3>'+
+      '<p class="cfg-hint" style="margin-bottom:12px;">Choisissez un code. L\u2019application en calcule '+
+      'une empreinte : le code lui-m\u00eame n\u2019est enregistr\u00e9 nulle part et ne peut pas \u00eatre relu.</p>'+
+      '<div class="f" style="margin-bottom:10px;"><label>Nouveau code</label>'+
+        '<input type="password" id="dc-code" autocomplete="off"></div>'+
+      '<div class="f" style="margin-bottom:10px;"><label>Confirmer</label>'+
+        '<input type="password" id="dc-code2" autocomplete="off"></div>'+
+      '<p class="cfg-hint" id="dc-err" style="color:var(--rust);min-height:16px;"></p>'+
+      '<div id="dc-res"></div>'+
+      '<div class="mact">'+
+        '<button class="btn ghost" id="dc-non">Fermer</button>'+
+        '<button class="btn amber" id="dc-oui">Calculer</button>'+
+      '</div>'+
+    '</div></div>';
+  q('#dc-non').onclick=closeModal;
+  q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
+  q('#dc-oui').onclick=async function(){
+    var a=(q('#dc-code')||{}).value||'', b=(q('#dc-code2')||{}).value||'';
+    var z=q('#dc-err');
+    if(a.length<4){ if(z) z.textContent='Quatre caract\u00e8res au minimum.'; return; }
+    if(a!==b){ if(z) z.textContent='Les deux saisies diff\u00e8rent.'; return; }
+    if(z) z.textContent='';
+    var h = await empreinte(a);
+    var ligne = "var CFG_CODE_BUREAU = '"+h+"';";
+    var r=q('#dc-res');
+    if(r) r.innerHTML =
+      '<p class="cfg-hint" style="margin-bottom:6px;">Remplacez cette ligne dans le fichier, '+
+      'puis red\u00e9ployez. Tous les appareils demanderont alors le code.</p>'+
+      '<textarea readonly id="dc-ligne" rows="3" style="width:100%;font-family:var(--fm);'+
+      'font-size:11px;border:1.5px solid var(--line);border-radius:7px;padding:8px;background:#fff;">'+
+      esc(ligne)+'</textarea>'+
+      '<button class="btn ghost" id="dc-copier" style="width:100%;justify-content:center;margin-top:8px;">Copier la ligne</button>';
+    var bc=q('#dc-copier');
+    if(bc) bc.onclick=function(){
+      try{ navigator.clipboard.writeText(ligne); toast(true,'Ligne copi\u00e9e.'); }
+      catch(e){ var t=q('#dc-ligne'); if(t){ t.select(); } toast(false,'Copie impossible \u2014 s\u00e9lectionnez le texte.'); }
+    };
+  };
+}
+
 function estBureau(){ return !SY.on || SY.role==='bureau'; }
 
 /* Le bureau voit tout, un technicien ne voit que ses rapports */
@@ -5658,6 +5760,10 @@ function openCfg(){
       '</select></div>'+
     '</div>'+
     '<p class="cfg-hint" id="sy-role-aide" style="margin:-4px 0 10px;"></p>'+
+    (estBureau()
+      ? '<button class="btn ghost" id="sy-code" style="width:100%;justify-content:center;margin-bottom:10px;">'+
+        (codeBureauExige()?'Changer le code d\u2019acc\u00e8s Bureau':'D\u00e9finir un code d\u2019acc\u00e8s Bureau')+'</button>'
+      : '')+
     '<div class="f" style="margin-bottom:8px;"><label>Adresse du projet Supabase</label>'+
       '<input type="text" id="sy-url" value="'+esc(SY.url||'')+'" placeholder="https://xxxxx.supabase.co"></div>'+
     '<div class="f" style="margin-bottom:10px;"><label>Cl\u00e9 publique (anon)</label>'+
@@ -5772,6 +5878,9 @@ function openCfg(){
     }
   });
 
+  var bcode=q('#sy-code');
+  if(bcode) bcode.onclick=fenetreDefinirCode;
+
   var bmj=q('#cfg-maj');
   if(bmj) bmj.onclick=function(){ verifierMaj(false); };
   var biv=q('#sy-invit');
@@ -5780,14 +5889,14 @@ function openCfg(){
   if(bdg) bdg.onclick=async function(){
     majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
     SY.url=normUrl(q('#sy-url').value); SY.key=q('#sy-key').value.trim();
-    SY.user=q('#sy-user').value.trim(); SY.role=q('#sy-role').value;
+    SY.user=q('#sy-user').value.trim(); SY.role=await roleAutorise(q('#sy-role').value);
     await saveSync();
     diagnostic();
   };
   q('#sy-now').onclick=async function(){
     majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
     SY.url=normUrl(q('#sy-url').value); SY.key=q('#sy-key').value.trim();
-    SY.user=q('#sy-user').value.trim(); SY.role=q('#sy-role').value;
+    SY.user=q('#sy-user').value.trim(); SY.role=await roleAutorise(q('#sy-role').value);
     await saveSync();
     closeModal();
     synchroniser(false);
@@ -5805,7 +5914,7 @@ function openCfg(){
     SY.url=normUrl(q('#sy-url').value);
     SY.key=q('#sy-key').value.trim();
     SY.user=q('#sy-user').value.trim();
-    SY.role=q('#sy-role').value;
+    SY.role=await roleAutorise(q('#sy-role').value);
     await saveSync();
     await sSet('cfg',ST.cfg);closeModal();toast(true,'R\u00e9glages enregistr\u00e9s.');
   };
