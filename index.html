@@ -967,7 +967,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1600';
+var VERSION = '2026.10.16-1620';
 
 async function verifierMaj(silencieux){
   try{
@@ -1867,12 +1867,25 @@ function demanderCodeBureau(){
   });
 }
 
-/* Rôle demandé depuis les Réglages : le passage en Bureau est contrôlé. */
+/* Le rôle Bureau est un droit à redemander, pas un acquis définitif :
+   le déverrouillage ne vaut que pour la session en cours. Un appareil
+   rouvert redemande le code, et un technicien passé en Bureau avant
+   l'instauration du code ne le reste pas. */
+var BUREAU_OK = false;
+
+function bureauDeverrouille(){ return !codeBureauExige() || BUREAU_OK; }
+
+async function deverrouillerBureau(){
+  if(bureauDeverrouille()) return true;
+  var ok = await demanderCodeBureau();
+  if(ok) BUREAU_OK = true;
+  return ok;
+}
+
 async function roleAutorise(demande){
   if(demande!=='bureau') return demande;
-  if(SY.role==='bureau') return 'bureau';      /* déjà accordé */
   if(!codeBureauExige()) return 'bureau';      /* aucun code configuré */
-  var ok = await demanderCodeBureau();
+  var ok = await deverrouillerBureau();
   if(!ok) toast(false,'R\u00f4le inchang\u00e9.');
   return ok ? 'bureau' : 'technicien';
 }
@@ -1925,11 +1938,11 @@ function fenetreDefinirCode(){
   };
 }
 
-function estBureau(){ return !SY.on || SY.role==='bureau'; }
+function estBureau(){ return !SY.on || (SY.role==='bureau' && bureauDeverrouille()); }
 
 /* Le bureau voit tout, un technicien ne voit que ses rapports */
 function visibleParMoi(e){
-  if(SY.role==='bureau' || !SY.on) return true;
+  if(estBureau()) return true;      /* bureau d\u00e9verrouill\u00e9, ou usage mono-poste */
   var moi=(SY.user||ST.cfg.tech||'').trim().toLowerCase();
   if(!moi) return true;
   var t=(e.tech||'').trim().toLowerCase();
@@ -5770,6 +5783,13 @@ function openCfg(){
       '</select></div>'+
     '</div>'+
     '<p class="cfg-hint" id="sy-role-aide" style="margin:-4px 0 10px;"></p>'+
+    (SY.role==='bureau' && !bureauDeverrouille()
+      ? '<p class="cfg-hint" style="background:#FCF7E8;border:1.5px solid #E0D2A8;border-radius:8px;'+
+        'padding:10px 12px;margin:-2px 0 8px;">Acc\u00e8s Bureau <strong>verrouill\u00e9</strong>. '+
+        'Le code est demand\u00e9 \u00e0 chaque ouverture de l\u2019application.</p>'+
+        '<button class="btn amber" id="sy-deverrou" style="width:100%;justify-content:center;margin-bottom:10px;">'+
+        'D\u00e9verrouiller l\u2019acc\u00e8s Bureau</button>'
+      : '')+
     (estBureau()
       ? '<p class="cfg-hint" style="margin:-2px 0 8px;">'+(codeBureauExige()
           ? '<span style="color:#1F6B36;">\u2713 Code d\u2019acc\u00e8s <strong>actif</strong> \u2014 le passage en r\u00f4le Bureau le demande.</span>'
@@ -5890,6 +5910,12 @@ function openCfg(){
       el.innerHTML = '<strong style="color:#8A6A1F;">Aucune sauvegarde effectu\u00e9e \u00e0 ce jour.</strong>';
     }
   });
+
+  var bdv=q('#sy-deverrou');
+  if(bdv) bdv.onclick=async function(){
+    var ok = await deverrouillerBureau();
+    if(ok){ closeModal(); renderApp(); openCfg(); toast(true,'Acc\u00e8s Bureau d\u00e9verrouill\u00e9.'); }
+  };
 
   var bcode=q('#sy-code');
   if(bcode) bcode.onclick=fenetreDefinirCode;
