@@ -136,7 +136,22 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 /* CERFA */
 .toggle-cerfa{display:flex;align-items:center;gap:10px;background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:12px 15px;cursor:pointer;font-weight:700;font-size:14px;margin-bottom:4px;}
 .toggle-cerfa input{width:18px;height:18px;accent-color:var(--amber2);flex-shrink:0;}
-.ctbl{width:100%;border-collapse:collapse;margin:4px 0 12px;}
+/* Un tableau à colonnes ne peut pas rétrécir sous une certaine largeur :
+   on le laisse défiler dans son cadre plutôt que d'élargir tout le panneau. */
+.ctbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+/* Sur téléphone, le tableau des plages devient une liste : trois colonnes de
+   cases à cocher ne tiennent pas, et un défilement latéral passe inaperçu. */
+@media(max-width:620px){
+  .ctbl-freq, .ctbl-freq tbody, .ctbl-freq tr, .ctbl-freq td{display:block;width:auto;}
+  .ctbl-freq thead{display:none;}
+  .ctbl-freq{min-width:0;}
+  .ctbl-freq tr{border-bottom:1.5px solid var(--line);padding:4px 0 9px;}
+  .ctbl-freq tr:last-child{border-bottom:0;}
+  .ctbl-freq td{border-bottom:0;padding:3px 0 3px 10px;}
+  .ctbl-freq td.rlbl{width:auto;padding:4px 0 2px;font-size:12px;
+    text-transform:uppercase;letter-spacing:.03em;color:var(--soft);}
+}
+.ctbl{width:100%;min-width:330px;border-collapse:collapse;margin:4px 0 12px;}
 .ctbl th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--soft);font-weight:700;padding:0 7px 6px;border-bottom:1.5px solid var(--line);}
 .ctbl td{padding:5px 7px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .ctbl td.rlbl{font-weight:700;font-size:13px;white-space:nowrap;width:80px;}
@@ -164,7 +179,11 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 /* RESPONSIVE */
 @media(max-width:720px){
   .page{padding:14px 12px 70px;}
-  .form-layout{flex-direction:column;}
+  /* En colonne, « align-items:flex-start » hérité ferait prendre à chaque bloc
+     la largeur de son contenu au lieu de celle de l'écran : le panneau gonflait
+     à 577 px dans un écran de 390 et tout se retrouvait rogné à droite. */
+  .form-layout{flex-direction:column;align-items:stretch;}
+  .form-layout > *{max-width:100%;min-width:0;}
   .tabs{width:100%;flex-direction:row;overflow-x:auto;position:sticky;top:60px;background:var(--bg);padding:5px 0;gap:4px;z-index:15;}
   .tab{flex-shrink:0;}
   .panel-wrap{padding:18px 14px;}
@@ -937,7 +956,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.14-1845';
+var VERSION = '2026.10.16-1130';
 
 async function verifierMaj(silencieux){
   try{
@@ -4931,7 +4950,7 @@ function photoHtml(r){
   if(!r.photos||!r.photos.length)return'';
   return r.photos.map(function(p){
     return'<div class="pcard" data-pid="'+p.id+'">'+
-      '<img src="'+p.dataUrl+'" alt="">'+
+      '<img src="'+esc(p.dataUrl||p.url||'')+'" alt="" loading="lazy">'+
       '<div class="pb"><input type="text" data-cap value="'+esc(p.caption||'')+'" placeholder="L\u00e9gende"><button class="prm" data-prm>Retirer</button></div>'+
     '</div>';
   }).join('');
@@ -4965,18 +4984,26 @@ function bindPhotos(){
 }
 function bindPGrid(){
   var gr=q('#pgrid');if(!gr)return;
+  if(gr.dataset.lie) return;      /* un seul jeu d'écouteurs par grille */
+  gr.dataset.lie='1';
+  /* Attention : data-cap sans valeur donne "", qui est faux. Il faut tester
+     la présence de l'attribut, pas sa valeur — sinon le gestionnaire sort
+     aussitôt et rien n'est enregistré. */
   gr.addEventListener('input',function(e){
-    if(!e.target.dataset.cap)return;
+    if(!e.target.hasAttribute || !e.target.hasAttribute('data-cap'))return;
     var c=e.target.closest('[data-pid]');
     var p=(ST.cur.photos||[]).find(function(x){return x.id===c.dataset.pid;});
     if(p)p.caption=e.target.value;
   });
   gr.addEventListener('click',function(e){
-    if(!e.target.dataset.prm)return;
-    var c=e.target.closest('[data-pid]');
-    ST.cur.photos=ST.cur.photos.filter(function(x){return x.id!==c.dataset.pid;});
+    var bt = e.target.closest ? e.target.closest('[data-prm]') : null;
+    if(!bt) return;
+    var c = bt.closest('[data-pid]');
+    if(!c) return;
+    ST.cur.photos=(ST.cur.photos||[]).filter(function(x){return x.id!==c.dataset.pid;});
     gr.innerHTML=photoHtml(ST.cur);
     majCompteurPhotos();
+    save(false);                 /* le retrait doit survivre à la fermeture */
   });
 }
 async function doPhotos(files){
@@ -5084,19 +5111,19 @@ function panelCerfa(r){
       '<div class="fg">'+fldC('[5] D\u00e9tecteur manuel','detectIdent',c.detectIdent)+fldC('Contr\u00f4l\u00e9 le','detectDate',c.detectDate,{type:'date'})+
       '<div class="f full"><label>[6] Syst\u00e8me permanent de d\u00e9tection de fuites</label>'+rrC('csp','sysPerm',c.sysPerm,[{v:'oui',l:'OUI'},{v:'non',l:'NON'}])+'</div></div>'+
       '<div class="tear">[7]-[9] Quantit\u00e9 de fluide / Fr\u00e9quences</div>'+
-      '<table class="ctbl"><thead><tr><th></th><th>Plage 1</th><th>Plage 2</th><th>Plage 3</th></tr></thead><tbody>'+
+      '<div class="ctbl-wrap"><table class="ctbl ctbl-freq"><thead><tr><th></th><th>Plage 1</th><th>Plage 2</th><th>Plage 3</th></tr></thead><tbody>'+
         [{k:'hcfc',l:'HCFC',o:['2 kg \u2264 Q < 30 kg','30 kg \u2264 Q < 300 kg','Q \u2265 300 kg']},
          {k:'hfcpfc',l:'HFC/PFC',o:['5 t \u2264 teqCO2 < 50 t','50 t \u2264 teqCO2 < 500 t','teqCO2 \u2265 500 t']},
          {k:'hfo',l:'HFO',o:['1 kg \u2264 Q < 10 kg','10 kg \u2264 Q < 100 kg','Q \u2265 100 kg']}
         ].map(function(row){return'<tr><td class="rlbl">'+row.l+'</td>'+row.o.map(function(opt,i){var kk=row.k+'_'+i;return'<td><label class="cchk"><input type="checkbox" data-chk="'+P+'qFluide.'+kk+'" '+((qf[kk])?'checked':'')+'>'+esc(opt)+'</label></td>';}).join('')+'</tr>';}).join('')+
-      '</tbody></table>'+
+      '</tbody></table></div>'+
       '<div class="fg"><div class="f full"><label>[8] Sans syst\u00e8me permanent \u2014 fr\u00e9quence</label>'+rrC('cfs','freqSans',c.freqSans,[{v:'12',l:'12 mois'},{v:'6',l:'6 mois'},{v:'3',l:'3 mois'}])+'</div>'+
       '<div class="f full"><label>[9] Avec syst\u00e8me permanent \u2014 fr\u00e9quence</label>'+rrC('cfa','freqAvec',c.freqAvec,[{v:'24',l:'24 mois'},{v:'12',l:'12 mois'},{v:'6',l:'6 mois'}])+'</div></div>'+
       '<div class="tear">[10] Fuites constat\u00e9es</div>'+
       rrC('cfc','fuitesConst',c.fuitesConst,[{v:'oui',l:'OUI'},{v:'non',l:'NON'}])+
-      '<table class="ctbl" style="margin-top:8px;"><thead><tr><th style="width:30px;">N\u00b0</th><th>Localisation</th><th style="width:150px;">R\u00e9paration</th></tr></thead><tbody>'+
+      '<div class="ctbl-wrap"><table class="ctbl" style="margin-top:8px;"><thead><tr><th style="width:30px;">N\u00b0</th><th>Localisation</th><th style="width:150px;">R\u00e9paration</th></tr></thead><tbody>'+
         [0,1,2].map(function(i){var f=(c.fuites&&c.fuites[i])||{loc:'',rep:''};return'<tr><td>'+(i+1)+'</td><td><input type="text" data-f="'+P+'fuites.'+i+'.loc" value="'+esc(f.loc||'')+'"></td><td>'+rrC('cfr'+i,'fuites.'+i+'.rep',f.rep,[{v:'realisee',l:'R\u00e9alis\u00e9e'},{v:'afaire',l:'A faire'}])+'</td></tr>';}).join('')+
-      '</tbody></table>'+
+      '</tbody></table></div>'+
       '<div class="tear">[11] Manipulation du fluide</div>'+
       '<div class="fg">'+fldC('Charg\u00e9e totale A+B+C (kg)','chargee',c.chargee)+fldC('R\u00e9cup\u00e9r\u00e9e totale D+E (kg)','recup',c.recup)+fldC('A \u2014 Fluide vierge (kg)','vierge',c.vierge)+fldC('D \u2014 Fluide au traitement (kg)','traitement',c.traitement)+fldC('B \u2014 Fluide recycl\u00e9 (kg)','recycle',c.recycle)+fldC('E \u2014 R\u00e9utilisation (kg)','reutilisation',c.reutilisation)+fldC('C \u2014 Fluide r\u00e9g\u00e9n\u00e9r\u00e9 (kg)','regen',c.regen)+fldC('N\u00b0 BSFF','bsff',c.bsff)+fldC('Fluide si changement','denomChg',c.denomChg,{full:true})+fldC('Contenants (id.)','contenants',c.contenants,{full:true})+'</div>'+
       '<div class="tear">[14] Observations</div>'+ftaC('Observations','obs',c.obs,4)+
