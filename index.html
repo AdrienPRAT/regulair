@@ -967,7 +967,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1500';
+var VERSION = '2026.10.16-1545';
 
 async function verifierMaj(silencieux){
   try{
@@ -1298,6 +1298,13 @@ async function diagnostic(){
   ajouter('info','Derni\u00e8re synchronisation',
     SY.last ? new Date(SY.last).toLocaleString('fr-FR') : 'jamais');
 
+  if(codeBureauExige())
+    ajouter('ok','Code d\u2019acc\u00e8s Bureau','Actif : le passage en r\u00f4le Bureau exige le code.');
+  else
+    ajouter('att','Aucun code d\u2019acc\u00e8s',
+      'Le r\u00f4le Bureau est en libre choix : tout utilisateur peut le s\u00e9lectionner et '+
+      'acc\u00e9der au fichier client et \u00e0 la sauvegarde compl\u00e8te.');
+
   /* État de la mémoire du navigateur : c'est elle qui lâche en premier
      sur téléphone, et son échec était jusqu'ici silencieux. */
   try{
@@ -1392,7 +1399,7 @@ var CFG_KEY = 'sb_publishable_W-rDEVFtbz9-L094APfcRg_-AisyyO-';
 /* Empreinte du code d'accès au rôle Bureau. Vide = aucun code demandé.
    Ce n'est pas le code lui-même : on ne peut pas le relire ici.
    Pour le définir : R\u00e9glages \u2192 D\u00e9finir le code d'acc\u00e8s (en r\u00f4le Bureau). */
-var CFG_CODE_BUREAU = '74369e7324033225f1c2a337a3dddb9a840c98d9e42f76f2aa3023c854fd4624';
+var CFG_CODE_BUREAU = '';
 
 var CFG_KEY_ALT = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzdHFub2VqaWpmaHp0aHpucWNkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3ODg0NDUsImV4cCI6MjEwNDM2NDQ0NX0.PyWuwzEoAjeq9OlZAnnRM_WMqpYEpW7u5qg9HXorDxw';
 
@@ -1878,6 +1885,9 @@ function fenetreDefinirCode(){
       '<h3>Code d\u2019acc\u00e8s Bureau</h3>'+
       '<p class="cfg-hint" style="margin-bottom:12px;">Choisissez un code. L\u2019application en calcule '+
       'une empreinte : le code lui-m\u00eame n\u2019est enregistr\u00e9 nulle part et ne peut pas \u00eatre relu.</p>'+
+      '<p class="cfg-hint" style="margin-bottom:12px;">La ligne obtenue remplace celle qui commence par '+
+      '<code>var CFG_CODE_BUREAU</code> dans le fichier \u2014 <strong>cherchez ce nom</strong>, '+
+      'ne comptez pas les lignes. S\u2019il est introuvable, le fichier d\u00e9pos\u00e9 n\u2019est pas le bon.</p>'+
       '<div class="f" style="margin-bottom:10px;"><label>Nouveau code</label>'+
         '<input type="password" id="dc-code" autocomplete="off"></div>'+
       '<div class="f" style="margin-bottom:10px;"><label>Confirmer</label>'+
@@ -5761,7 +5771,10 @@ function openCfg(){
     '</div>'+
     '<p class="cfg-hint" id="sy-role-aide" style="margin:-4px 0 10px;"></p>'+
     (estBureau()
-      ? '<button class="btn ghost" id="sy-code" style="width:100%;justify-content:center;margin-bottom:10px;">'+
+      ? '<p class="cfg-hint" style="margin:-2px 0 8px;">'+(codeBureauExige()
+          ? '<span style="color:#1F6B36;">\u2713 Code d\u2019acc\u00e8s <strong>actif</strong> \u2014 le passage en r\u00f4le Bureau le demande.</span>'
+          : '<span style="color:#8A6A1F;">\u26a0 <strong>Aucun code</strong> \u2014 n\u2019importe qui peut choisir le r\u00f4le Bureau.</span>')+'</p>'+
+        '<button class="btn ghost" id="sy-code" style="width:100%;justify-content:center;margin-bottom:10px;">'+
         (codeBureauExige()?'Changer le code d\u2019acc\u00e8s Bureau':'D\u00e9finir un code d\u2019acc\u00e8s Bureau')+'</button>'
       : '')+
     '<div class="f" style="margin-bottom:8px;"><label>Adresse du projet Supabase</label>'+
