@@ -1002,7 +1002,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1900';
+var VERSION = '2026.10.16-1945';
 
 async function verifierMaj(silencieux){
   try{
@@ -3958,7 +3958,8 @@ function buildMailto(dest, sujet, corps){
 
 /* Version courte du corps, sans accents, pour les liens mailto */
 function corpsCourt(r){
-  var t = (isSuite(r) ? 'SUITE A DONNER' : 'Rapport d intervention') + '\n\n';
+  var t = avertissementMail(false) +
+          (isSuite(r) ? 'SUITE A DONNER' : 'Rapport d intervention') + '\n\n';
   t += 'Reference : '+(r.ref||'')+'\n';
   if(r.site)        t += 'Site : '+r.site+'\n';
   if(r.dateDebut)   t += 'Date : '+fmtRange(r)+'\n';
@@ -4013,10 +4014,37 @@ function destSuivi(r){
   return res.join(', ');
 }
 
+/* Mention en tête de tous les mails sortants. Le corps d'un mail mailto:
+   est du texte brut : aucune taille de police n'est possible, la mise en
+   évidence passe donc par les majuscules et l'encadrement. Placée en tête,
+   elle survit au raccourcissement imposé par la limite Windows/Outlook. */
+function avertissementMail(accents){
+  var L='========================================================';
+  if(accents){
+    return L+'\n'+
+      '   MERCI DE NE PAS RÉPONDRE À CE MESSAGE\n'+
+      L+'\n'+
+      'Cette adresse est une boîte d’envoi uniquement : les réponses\n'+
+      'qui y sont adressées ne sont pas lues.\n'+
+      'Pour toute question, contactez votre interlocuteur '+CO_NAME+'\n'+
+      'habituel.\n'+
+      L+'\n\n';
+  }
+  return L+'\n'+
+    '   MERCI DE NE PAS REPONDRE A CE MESSAGE\n'+
+    L+'\n'+
+    'Cette adresse est une boite d\'envoi uniquement : les reponses\n'+
+    'qui y sont adressees ne sont pas lues.\n'+
+    'Pour toute question, contactez votre interlocuteur REGUL\'AIR\n'+
+    'habituel.\n'+
+    L+'\n\n';
+}
+
 /* Compose le corps du mail de suivi */
 function corpsSuivi(r){
-  var t = isSuite(r) ? 'INTERVENTION AVEC SUITE \u00c0 DONNER\n\n'
-                     : 'RAPPORT D\u2019INTERVENTION\n\n';
+  var t = avertissementMail(true) +
+          (isSuite(r) ? 'INTERVENTION AVEC SUITE \u00c0 DONNER\n\n'
+                      : 'RAPPORT D\u2019INTERVENTION\n\n');
   t+='R\u00e9f\u00e9rence : '+(r.ref||'')+'\n';
   if(r.site)        t+='Site : '+r.site+'\n';
   if(r.dateDebut)   t+='Date : '+fmtRange(r)+'\n';
