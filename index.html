@@ -419,6 +419,11 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .hm-val{font-family:var(--fm);font-size:12px;font-weight:600;}
 .hm-barre{width:100%;max-width:44px;background:var(--amber);border-radius:5px 5px 0 0;min-height:5px;}
 .hm-lib{font-size:11px;color:var(--soft);}
+.bs-echecs{max-height:168px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;background:#fff;}
+.bs-l{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-bottom:1px solid var(--line);font-size:12.5px;}
+.bs-l:last-child{border-bottom:0;}
+.bs-l strong{color:var(--rust);font-size:12.5px;}
+.bs-l span{color:var(--soft);font-size:11.5px;word-break:break-word;}
 .mini-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:14px;}
 .mini-stats div{display:flex;flex-direction:column;gap:2px;}
 .mini-stats strong{font-size:21px;font-weight:700;}
@@ -923,12 +928,32 @@ function bilanSync(envoyes, recus, erreurs){
         (erreurs?'<div><strong style="color:var(--rust);">'+erreurs+'</strong><span>erreur'+(erreurs>1?'s':'')+'</span></div>':'')+
       '</div>'+
       (erreurs
-        ? '<p class="cfg-hint">Certains \u00e9l\u00e9ments n\u2019ont pas pu \u00eatre transmis. Relancez dans quelques instants ; le d\u00e9tail figure dans la console du navigateur.</p>'
+        /* Renvoyer vers « la console du navigateur » n'a aucun sens sur un
+           téléphone : on montre directement ce qui a échoué. */
+        ? '<p class="cfg-hint" style="margin-bottom:8px;">Voici ce qui n\u2019est pas pass\u00e9\u00a0:</p>'+
+          '<div class="bs-echecs">'+
+          (function(){
+            var ko = LOG.filter(function(l){
+              return /\u00c9CHEC|m\u00e9moire pleine|refus|Non enregistr/i.test(l.t+' '+l.d);
+            });
+            if(!ko.length) return '<p class="cfg-hint">Aucun d\u00e9tail enregistr\u00e9. Relancez la synchronisation.</p>';
+            return ko.slice(-6).map(function(l){
+              return '<div class="bs-l"><strong>'+esc(l.t)+'</strong>'+(l.d?'<span>'+esc(l.d)+'</span>':'')+'</div>';
+            }).join('');
+          })()+
+          '</div>'+
+          '<p class="cfg-hint" style="margin-top:10px;">Si la m\u00e9moire de l\u2019appareil est pleine\u00a0: '+
+          'R\u00e9glages \u2192 Diagnostic \u2192 <strong>Lib\u00e9rer de la place</strong>. '+
+          'Le journal complet s\u2019y trouve aussi.</p>'
         : '<p class="cfg-hint">Vos donn\u00e9es et celles de l\u2019\u00e9quipe sont \u00e0 jour.</p>')+
-      '<div class="mact"><button class="btn amber" id="bs-ok">Fermer</button></div>'+
+      '<div class="mact">'+
+        (erreurs?'<button class="btn ghost" id="bs-diag">Diagnostic</button>':'')+
+        '<button class="btn amber" id="bs-ok">Fermer</button></div>'+
     '</div></div>';
   q('#bsg').onclick=function(e){ if(e.target.id==='bsg') closeModal(); };
   q('#bs-ok').onclick=closeModal;
+  var bd2=q('#bs-diag');
+  if(bd2) bd2.onclick=function(){ closeModal(); diagnostic(); };
 }
 
 /* Fenêtre d'avancement de la synchronisation */
@@ -967,7 +992,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1620';
+var VERSION = '2026.10.16-1730';
 
 async function verifierMaj(silencieux){
   try{
@@ -1304,6 +1329,21 @@ async function diagnostic(){
     ajouter('att','Aucun code d\u2019acc\u00e8s',
       'Le r\u00f4le Bureau est en libre choix : tout utilisateur peut le s\u00e9lectionner et '+
       'acc\u00e9der au fichier client et \u00e0 la sauvegarde compl\u00e8te.');
+
+  try{
+    var sa = await sGet('sauvAuto');
+    if(sa && sa.quand){
+      var j = joursDepuis(sa.quand);
+      ajouter(j>10?'att':'ok','Sauvegarde en ligne',
+        'Derni\u00e8re le '+new Date(sa.quand).toLocaleDateString('fr-FR')+
+        ' \u2014 '+sa.n+' rapport(s), '+Math.round((sa.octets||0)/1024)+' Ko.'+
+        (j>10?' Plus de '+j+' jours : v\u00e9rifiez que l\u2019espace existe toujours.':''));
+    } else {
+      ajouter('att','Aucune sauvegarde en ligne',
+        'Si l\u2019espace <code>sauvegardes</code> n\u2019a pas \u00e9t\u00e9 cr\u00e9\u00e9 dans Supabase, '+
+        'ex\u00e9cutez le script <code>supabase-sauvegardes.sql</code>.');
+    }
+  }catch(e){}
 
   /* État de la mémoire du navigateur : c'est elle qui lâche en premier
      sur téléphone, et son échec était jusqu'ici silencieux. */
@@ -1790,6 +1830,7 @@ async function synchroniser(silencieux){
        a échoué serait considéré comme traité et ne repartirait jamais. */
     if(!erreurs) SY.last = Date.now();
     await saveSync();
+    if(!erreurs) peutEtreSauvegarder();     /* en arrière-plan, sans bloquer */
     majBadgeSync(erreurs?'err':'ok');
     if(!silencieux){
       fermerProgres();
@@ -4179,6 +4220,87 @@ async function rappelSauvegarde(){
   q('#sv-no').onclick=function(){ bar.remove(); };
 }
 
+/* ═══════════ SAUVEGARDE AUTOMATIQUE EN LIGNE ═══════════
+   Déposée dans un espace en écriture seule : l'application y écrit,
+   mais ne peut rien y relire. La clé publique ne permet donc pas de
+   récupérer la base. Les sauvegardes se téléchargent depuis le
+   tableau de bord Supabase, sous votre propre compte. */
+var DELAI_SAUV_AUTO = 7*24*3600*1000;
+
+/* Les photos déjà déposées dans leur espace ne sont pas recopiées ici :
+   la sauvegarde resterait énorme pour rien. */
+function contenuSauvegarde(reports, ctr){
+  var allege = JSON.parse(JSON.stringify(reports));
+  allege.forEach(function(r){
+    if(r.photos) r.photos.forEach(function(ph){
+      if(ph.url && ph.dataUrl) delete ph.dataUrl;
+    });
+  });
+  return {
+    format:'regulair-backup', version:1,
+    exportedAt:new Date().toISOString(),
+    count:allege.length,
+    cfg:ST.cfg, counter:ctr||{v:0},
+    index:ST.idx, clients:CLIENTS, reports:allege
+  };
+}
+
+async function deposerSauvegarde(silencieux){
+  if(!SY.on) return {ok:false, raison:'hors ligne'};
+  if(!estBureau()) return {ok:false, raison:'r\u00f4le'};
+  try{
+    var reports=[];
+    for(var i=0;i<ST.idx.length;i++){
+      var r=await sGet('r:'+ST.idx[i].id);
+      if(r) reports.push(r);
+    }
+    var ctr = await sGet('ctr');
+    var texte = JSON.stringify(contenuSauvegarde(reports, ctr));
+    var d = new Date();
+    function deux(n){ return String(n).padStart(2,'0'); }
+    var nom = d.getFullYear()+'/REGULAIR-'+d.getFullYear()+deux(d.getMonth()+1)+deux(d.getDate())+
+              '-'+deux(d.getHours())+deux(d.getMinutes())+'.json';
+    var rep = await fetch(normUrl(SY.url)+'/storage/v1/object/sauvegardes/'+nom, {
+      method:'POST',
+      headers:{'apikey':SY.key,'Authorization':'Bearer '+SY.key,'Content-Type':'application/json'},
+      body: texte
+    });
+    if(rep.ok){
+      await sSet('sauvAuto', {quand:Date.now(), n:reports.length, octets:texte.length, nom:nom});
+      if(!silencieux) toast(true,'Sauvegarde d\u00e9pos\u00e9e en ligne ('+reports.length+' rapport(s)).');
+      return {ok:true, nom:nom, octets:texte.length};
+    }
+    var txt=''; try{ txt = await rep.text(); }catch(e){}
+    if(!silencieux){
+      diagSync('Sauvegarde en ligne impossible',
+        (rep.status===400 || rep.status===404
+          ? 'L\u2019espace <code>sauvegardes</code> n\u2019existe pas encore.<br><br>'+
+            'Ex\u00e9cutez le script <code>supabase-sauvegardes.sql</code> dans Supabase \u2192 SQL Editor.'
+          : 'Le d\u00e9p\u00f4t a \u00e9t\u00e9 refus\u00e9 ('+rep.status+').<br><code>'+esc(txt.slice(0,160))+'</code>'));
+    }
+    return {ok:false, raison:'HTTP '+rep.status};
+  }catch(e){
+    if(!silencieux) toast(false,'Sauvegarde en ligne impossible.');
+    return {ok:false, raison:String(e && e.message || e)};
+  }
+}
+
+async function sauvegardeAutoDue(){
+  if(!SY.on || !estBureau() || !ST.idx.length) return false;
+  var s = await sGet('sauvAuto');
+  if(!s || !s.quand) return true;
+  return (Date.now() - s.quand) > DELAI_SAUV_AUTO;
+}
+
+/* Déclenchée après une synchronisation réussie, sans rien demander. */
+async function peutEtreSauvegarder(){
+  try{
+    if(!await sauvegardeAutoDue()) return;
+    var r = await deposerSauvegarde(true);
+    if(r.ok) noter('Sauvegarde en ligne', r.nom);
+  }catch(e){}
+}
+
 async function exportData(){
   if(!estBureau()){ toast(false,'R\u00e9serv\u00e9 au r\u00f4le Bureau.'); return; }
   try{
@@ -5828,6 +5950,11 @@ function openCfg(){
     '<div style="margin-bottom:6px;"><label style="font-size:12px;font-weight:600;color:var(--soft);text-transform:uppercase;letter-spacing:.03em;">Donn\u00e9es</label></div>'+
     '<p class="cfg-hint">'+ST.idx.length+' rapport(s) et '+CLIENTS.length+' client(s) enregistr\u00e9(s) sur cet appareil. Exportez r\u00e9guli\u00e8rement : les donn\u00e9es vivent dans ce navigateur uniquement.</p>'+
     '<p class="cfg-hint" id="cfg-sauv-date" style="margin-top:-6px;"></p>'+
+    (estBureau() && SY.on
+      ? '<p class="cfg-hint" id="cfg-sauv-auto" style="margin-top:-4px;"></p>'+
+        '<button class="btn ghost" id="cfg-sauv-ligne" style="width:100%;justify-content:center;margin-bottom:10px;">'+
+        icon('save',14)+' Sauvegarder en ligne maintenant</button>'
+      : '')+
     (estBureau()
       ? '<div style="display:flex;gap:8px;margin-bottom:14px;">'+
           '<button class="btn ghost" id="cfg-export" style="flex:1;justify-content:center;">'+icon('save',14)+' Sauvegarder</button>'+
@@ -5910,6 +6037,28 @@ function openCfg(){
       el.innerHTML = '<strong style="color:#8A6A1F;">Aucune sauvegarde effectu\u00e9e \u00e0 ce jour.</strong>';
     }
   });
+
+  var bsl=q('#cfg-sauv-ligne');
+  if(bsl) bsl.onclick=async function(){
+    bsl.disabled=true; bsl.textContent='D\u00e9p\u00f4t en cours\u2026';
+    await deposerSauvegarde(false);
+    bsl.disabled=false; bsl.innerHTML=icon('save',14)+' Sauvegarder en ligne maintenant';
+    majEtatSauvAuto();
+  };
+  function majEtatSauvAuto(){
+    var el=q('#cfg-sauv-auto'); if(!el) return;
+    sGet('sauvAuto').then(function(sa){
+      if(sa && sa.quand){
+        var ko = Math.round((sa.octets||0)/1024);
+        el.innerHTML = 'En ligne : derni\u00e8re le '+new Date(sa.quand).toLocaleDateString('fr-FR')+
+          ' ('+sa.n+' rapport(s), '+ko+' Ko). D\u00e9p\u00f4t automatique chaque semaine.';
+      } else {
+        el.innerHTML = 'Sauvegarde en ligne : <strong>jamais effectu\u00e9e</strong>. '+
+          'Elle se d\u00e9clenchera seule apr\u00e8s une synchronisation, une fois l\u2019espace cr\u00e9\u00e9 dans Supabase.';
+      }
+    });
+  }
+  majEtatSauvAuto();
 
   var bdv=q('#sy-deverrou');
   if(bdv) bdv.onclick=async function(){
