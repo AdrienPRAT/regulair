@@ -132,7 +132,11 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .sig-wrap canvas{display:block;width:100%;height:148px;touch-action:none;cursor:crosshair;border-radius:8px;}
 .shint{position:absolute;bottom:8px;left:11px;color:var(--line);font-size:12px;pointer-events:none;}
 .sig-ctrl{display:flex;justify-content:space-between;align-items:center;margin-top:7px;gap:8px;}
-.sig-ctrl input{flex:1;border:1.5px solid var(--line);border-radius:6px;padding:7px 9px;background:#fff;}
+/* min-width:0 : sans lui, le champ refuse de rétrécir sous sa largeur
+   naturelle et pousse la ligne hors de l'écran sur un petit téléphone. */
+.sig-ctrl input{flex:1 1 0;min-width:0;border:1.5px solid var(--line);border-radius:6px;padding:7px 9px;background:#fff;}
+.sig-block{min-width:0;}
+@media(max-width:360px){ .sig-ctrl{flex-wrap:wrap;} .sig-ctrl input{flex:1 0 100%;} }
 /* CERFA */
 .toggle-cerfa{display:flex;align-items:center;gap:10px;background:#fff;border:1.5px solid var(--line);border-radius:8px;padding:12px 15px;cursor:pointer;font-weight:700;font-size:14px;margin-bottom:4px;}
 .toggle-cerfa input{width:18px;height:18px;accent-color:var(--amber2);flex-shrink:0;}
@@ -141,7 +145,7 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
 .ctbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
 /* Sur téléphone, le tableau des plages devient une liste : trois colonnes de
    cases à cocher ne tiennent pas, et un défilement latéral passe inaperçu. */
-@media(max-width:620px){
+@media(max-width:900px){
   .ctbl-freq, .ctbl-freq tbody, .ctbl-freq tr, .ctbl-freq td{display:block;width:auto;}
   .ctbl-freq thead{display:none;}
   .ctbl-freq{min-width:0;}
@@ -151,7 +155,7 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
   .ctbl-freq td.rlbl{width:auto;padding:4px 0 2px;font-size:12px;
     text-transform:uppercase;letter-spacing:.03em;color:var(--soft);}
 }
-.ctbl{width:100%;min-width:330px;border-collapse:collapse;margin:4px 0 12px;}
+.ctbl{width:100%;min-width:260px;border-collapse:collapse;margin:4px 0 12px;}
 .ctbl th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--soft);font-weight:700;padding:0 7px 6px;border-bottom:1.5px solid var(--line);}
 .ctbl td{padding:5px 7px;border-bottom:1px solid var(--line);vertical-align:middle;}
 .ctbl td.rlbl{font-weight:700;font-size:13px;white-space:nowrap;width:80px;}
@@ -184,8 +188,15 @@ input,textarea,select{font-family:inherit;font-size:14px;color:var(--ink);}
      à 577 px dans un écran de 390 et tout se retrouvait rogné à droite. */
   .form-layout{flex-direction:column;align-items:stretch;}
   .form-layout > *{max-width:100%;min-width:0;}
-  .tabs{width:100%;flex-direction:row;overflow-x:auto;position:sticky;top:60px;background:var(--bg);padding:5px 0;gap:4px;z-index:15;}
-  .tab{flex-shrink:0;}
+  /* Les six onglets passent à la ligne au lieu de défiler : trois d'entre eux
+     — Photos, Signatures, Fiche fluides — se trouvaient hors de l'écran,
+     accessibles seulement par un défilement latéral que personne ne devine. */
+  .tabs{width:100%;flex-direction:row;flex-wrap:wrap;overflow-x:visible;
+    position:sticky;top:60px;background:var(--bg);padding:5px 0 7px;gap:5px;z-index:15;}
+  .tab{flex:0 1 auto;padding:8px 11px;font-size:12.5px;gap:5px;
+    border:1px solid var(--line);background:#fff;}
+  .tab .tn{display:none;}          /* le numéro ne sert à rien sur un petit écran */
+  .tab.active{border-color:var(--gr);}
   .panel-wrap{padding:18px 14px;}
   .fg,.cl-cols,.sig-grid{grid-template-columns:1fr;}
   .foot-bar{margin:0 -14px -18px;padding:12px 14px;flex-wrap:wrap;}
@@ -956,7 +967,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1130';
+var VERSION = '2026.10.16-1400';
 
 async function verifierMaj(silencieux){
   try{
@@ -5296,7 +5307,7 @@ function buildPdf(report){
     ftLines.forEach(function(l){doc.text(l,PW/2,ftY,{align:'center'});ftY+=3;});
     doc.setFontSize(6.5);doc.setTextColor(140,140,140);
     doc.text(report.ref||'',M,PH-5.5);
-    doc.text('p.'+pn,PW-M,PH-5.5,{align:'right'});
+    /* Le numéro de page est apposé à la fin, quand le total est connu. */
   }
   function np(){
     /* foot() écrit en 6,5 pt gris : sans cette sauvegarde, un paragraphe
@@ -5456,15 +5467,24 @@ function buildPdf(report){
 
   /* ── Annexe CERFA ── */
   var fiches=cerfasActives(report);
-  if(fiches.length){
-    fiches.forEach(function(fc){
-      foot();          /* finalise la page précédente */
-      doc.addPage();   /* une page par fiche CERFA */
-      buildCerfa(doc,fc);
-    });
-    foot();
-  } else {
-    foot();
+  foot();              /* finalise la dernière page du rapport */
+  var premierCerfa = doc.internal.getNumberOfPages() + 1;
+  fiches.forEach(function(fc){
+    doc.addPage();     /* une page par fiche CERFA */
+    buildCerfa(doc,fc);
+    /* Volontairement sans foot() : le CERFA est un formulaire officiel,
+       on n'imprime rien par-dessus. */
+  });
+
+  /* Numérotation « P n/N » du seul rapport : les CERFA sont des annexes,
+     ils ne sont ni numérotés ni comptés dans le total. */
+  var total = premierCerfa - 1;
+  for(var pg=1; pg<=total; pg++){
+    doc.setPage(pg);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(140,140,140);
+    doc.text('P '+pg+'/'+total, PW-M, PH-5.5, {align:'right'});
   }
   return doc;
 }
@@ -5600,14 +5620,15 @@ function buildCerfa(doc, c){
   v(c.obs, 15, 236, 180, 7.5);
 
   /* ─ Signatures ─ */
-  v(c.opNom,   46, 264, 72, 7.5);
-  v(c.detNom, 123, 264, 72, 7.5);
-  v(c.opQual,  46, 271, 72, 7.5);
-  v(c.detQual,123, 271, 72, 7.5);
-  v(c.opDate  ? fd(c.opDate)  : '',  46, 278, 40, 7.5);
-  v(c.detDate ? fd(c.detDate) : '', 123, 278, 40, 7.5);
-  if(c.opSig) {try{doc.addImage(c.opSig, 'PNG', 46, 269, 70, 9);}catch(e){}}
-  if(c.detSig){try{doc.addImage(c.detSig,'PNG',123, 269, 70, 9);}catch(e){}}
+  /* Bloc signatures descendu de 6 mm (0,6 cm) à la demande. */
+  v(c.opNom,   46, 270, 72, 7.5);
+  v(c.detNom, 123, 270, 72, 7.5);
+  v(c.opQual,  46, 277, 72, 7.5);
+  v(c.detQual,123, 277, 72, 7.5);
+  v(c.opDate  ? fd(c.opDate)  : '',  46, 284, 40, 7.5);
+  v(c.detDate ? fd(c.detDate) : '', 123, 284, 40, 7.5);
+  if(c.opSig) {try{doc.addImage(c.opSig, 'PNG', 46, 275, 70, 9);}catch(e){}}
+  if(c.detSig){try{doc.addImage(c.detSig,'PNG',123, 275, 70, 9);}catch(e){}}
 }
 
 
