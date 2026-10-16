@@ -967,7 +967,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1400';
+var VERSION = '2026.10.16-1430';
 
 async function verifierMaj(silencieux){
   try{
@@ -1089,6 +1089,7 @@ function fenetreInvitation(cfg){
 
 /* Fenêtre de partage, côté administrateur */
 function fenetrePartage(){
+  if(!estBureau()){ toast(false,'R\u00e9serv\u00e9 au r\u00f4le Bureau.'); return; }
   if(!SY.url || !SY.key){ toast(false,'Configurez d\u2019abord la synchronisation.'); return; }
   var lien = lienInvitation();
   q('#modal').innerHTML=
@@ -2206,14 +2207,14 @@ function renderClients(){
       '<button class="icon-btn" id="cl-back">'+icon('back')+'</button>'+
       '<div class="brand"><img src="'+LOGO_B64+'" alt="" style="height:28px;margin-right:8px;">Clients</div>'+
       '<div class="spacer"></div>'+
-      '<button class="btn ghost" id="cl-import">'+icon('open',15)+' Importer</button>'+
+      (estBureau()?'<button class="btn ghost" id="cl-import">'+icon('open',15)+' Importer</button>':'')+
       '<button class="btn amber" id="cl-new">'+icon('plus',16)+' Nouveau client</button>'+
     '</div>'+
     '<div class="page">'+
       '<div class="toolbar"><div class="sw">'+icon('search',15)+
         '<input id="cl-search" placeholder="Rechercher un client, une ville\u2026" value="'+esc(ST.clSearch||'')+'"></div></div>'+
       (function(){
-        var n = compterDoublons();
+        var n = estBureau() ? compterDoublons() : 0;
         return n ? '<div class="sauv-bar" id="cl-dbl">'+
           '<span class="sv-tx"><strong>'+n+' fiche(s) en double</strong>'+
           '<span>M\u00eame nom sur plusieurs fiches. La fusion conserve tout : '+
@@ -2224,7 +2225,8 @@ function renderClients(){
     '</div>';
   q('#cl-back').onclick=function(){ ST.view='list'; renderApp(); };
   q('#cl-new').onclick=function(){ editClient(defClient(), true); };
-  q('#cl-import').onclick=importClientsCSV;
+  var bci=q('#cl-import');
+  if(bci) bci.onclick=importClientsCSV;
   var bf=q('#cl-fusion');
   if(bf) bf.onclick=function(){
     doConfirm('Fusionner les doublons ?',
@@ -4053,6 +4055,7 @@ async function rappelSauvegarde(){
 }
 
 async function exportData(){
+  if(!estBureau()){ toast(false,'R\u00e9serv\u00e9 au r\u00f4le Bureau.'); return; }
   try{
     toast(true,'Pr\u00e9paration de la sauvegarde\u2026');
     var reports=[];
@@ -5664,7 +5667,9 @@ function openCfg(){
       '<button class="btn ghost" id="sy-now" style="flex:1;justify-content:center;">Synchroniser</button>'+
     '</div>'+
     '<button class="btn ghost" id="sy-diag" style="width:100%;justify-content:center;margin-bottom:8px;">Diagnostic</button>'+
-    (SY.on?'<button class="btn amber" id="sy-invit" style="width:100%;justify-content:center;margin-bottom:10px;">'+icon('plus',14)+' Inviter un collaborateur</button>':'')+
+    (SY.on && estBureau()
+      ? '<button class="btn amber" id="sy-invit" style="width:100%;justify-content:center;margin-bottom:10px;">'+icon('plus',14)+' Inviter un collaborateur</button>'
+      : '')+
     '<button class="btn ghost" id="cfg-maj" style="width:100%;justify-content:center;margin-bottom:8px;">V\u00e9rifier les mises \u00e0 jour</button>'+
     '<p class="cfg-hint" style="text-align:center;">Version '+VERSION+'</p>'+
     '<p class="cfg-hint">'+(SY.on
@@ -5684,11 +5689,15 @@ function openCfg(){
     '<div style="margin-bottom:6px;"><label style="font-size:12px;font-weight:600;color:var(--soft);text-transform:uppercase;letter-spacing:.03em;">Donn\u00e9es</label></div>'+
     '<p class="cfg-hint">'+ST.idx.length+' rapport(s) et '+CLIENTS.length+' client(s) enregistr\u00e9(s) sur cet appareil. Exportez r\u00e9guli\u00e8rement : les donn\u00e9es vivent dans ce navigateur uniquement.</p>'+
     '<p class="cfg-hint" id="cfg-sauv-date" style="margin-top:-6px;"></p>'+
-    '<div style="display:flex;gap:8px;margin-bottom:14px;">'+
-      '<button class="btn ghost" id="cfg-export" style="flex:1;justify-content:center;">'+icon('save',14)+' Sauvegarder</button>'+
-      '<button class="btn ghost" id="cfg-import" style="flex:1;justify-content:center;">'+icon('open',14)+' Restaurer</button>'+
-    '</div>'+
-    '<button class="btn ghost" id="cfg-factu" style="width:100%;justify-content:center;margin-bottom:14px;">'+icon('pdf',14)+' Export facturation</button>'+
+    (estBureau()
+      ? '<div style="display:flex;gap:8px;margin-bottom:14px;">'+
+          '<button class="btn ghost" id="cfg-export" style="flex:1;justify-content:center;">'+icon('save',14)+' Sauvegarder</button>'+
+          '<button class="btn ghost" id="cfg-import" style="flex:1;justify-content:center;">'+icon('open',14)+' Restaurer</button>'+
+        '</div>'+
+        '<button class="btn ghost" id="cfg-factu" style="width:100%;justify-content:center;margin-bottom:14px;">'+icon('pdf',14)+' Export facturation</button>'
+      /* Ne jamais masquer sans le dire : sinon on cherche un bouton disparu. */
+      : '<p class="cfg-hint" style="background:#FCF7E8;border:1.5px solid #E0D2A8;border-radius:8px;padding:10px 12px;margin-bottom:14px;">'+
+        'La sauvegarde, la restauration et l\u2019export de facturation sont r\u00e9serv\u00e9s au r\u00f4le <strong>Bureau</strong>.</p>')+
     '<div class="cfg-sep"></div>'+
     '<div style="margin-bottom:6px;"><label style="font-size:12px;font-weight:600;color:var(--soft);text-transform:uppercase;letter-spacing:.03em;">Mode hors-ligne</label></div>'+
     '<p class="cfg-hint">'+libBadge()+'<br>La biblioth\u00e8que PDF est m\u00e9moris\u00e9e au premier lancement connect\u00e9. Ensuite l\u2019application g\u00e9n\u00e8re les PDF sans r\u00e9seau.</p>'+
@@ -5696,7 +5705,8 @@ function openCfg(){
     '</div></div>';
   q('#mbg').onclick=function(e){if(e.target.id==='mbg')closeModal();};
   q('#cfg-cancel').onclick=closeModal;
-  q('#cfg-export').onclick=exportData;
+  var bex2=q('#cfg-export');
+  if(bex2) bex2.onclick=exportData;
   q('#sy-test').onclick=async function(){
     majDrapeauManuel(q('#sy-url').value, q('#sy-key').value);
     SY.url=normUrl(q('#sy-url').value);
@@ -5782,7 +5792,8 @@ function openCfg(){
     closeModal();
     synchroniser(false);
   };
-  q('#cfg-import').onclick=pickBackupFile;
+  var bim=q('#cfg-import');
+  if(bim) bim.onclick=pickBackupFile;
   var bf=q('#cfg-factu'); if(bf) bf.onclick=function(){ closeModal(); fenetreExportFactu(); };
   q('#cfg-ok').onclick=async function(){
     ST.cfg.tech=q('#cfg-tech').value;
