@@ -1002,7 +1002,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.16-1945';
+var VERSION = '2026.10.22-1030';
 
 async function verifierMaj(silencieux){
   try{
@@ -1234,9 +1234,107 @@ async function diagnostic(){
       'Passez le r\u00f4le sur <strong>Bureau</strong> dans les R\u00e9glages pour les voir.');
   }
 
+  /* Contrôles qui ne dépendent pas du réseau. Ils étaient placés après les
+     appels à Supabase, donc sautés dès que le serveur était injoignable —
+     c'est-à-dire précisément quand on en a besoin : le message « mémoire
+     pleine » renvoie ici. Ils s'exécutent désormais dans tous les cas. */
+  async function blocsLocaux(){
+    /* État de la mémoire du navigateur : c'est elle qui lâche en premier
+       sur téléphone, et son échec était jusqu'ici silencieux. */
+    try{
+      var octets = 0, oPhotos = 0, oRapports = 0, oClients = 0, oDivers = 0;
+      var nPhotos = 0, nLocales = 0, oLocales = 0, nRapports = 0;
+      for(var ci=0; ci<localStorage.length; ci++){
+        var cle = localStorage.key(ci);
+        if(!cle || cle.indexOf(PFX)!==0) continue;
+        var val = localStorage.getItem(cle) || '';
+        var taille = cle.length + val.length;
+        octets += taille;
+        var court = cle.slice(PFX.length);
+        if(court.indexOf('r:')===0){
+          nRapports++;
+          /* Les images pèsent presque toujours l'essentiel d'une fiche : les
+             compter à part est ce qui permet de savoir quoi faire de la place. */
+          var pho = 0;
+          try{
+            var o = JSON.parse(val);
+            (o.photos||[]).forEach(function(ph){
+              if(!ph.dataUrl) return;
+              var tp = String(ph.dataUrl).length;
+              pho += tp; nPhotos++;
+              if(!ph.url){ nLocales++; oLocales += tp; }
+            });
+          }catch(ex2){}
+          oPhotos   += pho;
+          oRapports += Math.max(0, taille - pho);
+        }
+        else if(court === 'clients') oClients += taille;
+        else                         oDivers  += taille;
+      }
+      function moDe(o){ return Math.round(o/104857.6)/10; }
+      var mo = Math.round(octets/104857.6)/10;     /* en Mo, une décimale */
+      /* Test réel : seule une écriture dit si la place existe encore. */
+      var place = true;
+      try{
+        var bourre = new Array(120000).join('x');   /* ~120 Ko */
+        localStorage.setItem(PFX+'__essai', bourre);
+        localStorage.removeItem(PFX+'__essai');
+      }catch(ex){ place = false; }
+      /* Sans ce détail, « mémoire pleine » ne dit pas quoi faire. */
+      var detail =
+        '<br><br>Détail\u00a0:<br>'+
+        '\u2022 photos\u00a0: <strong>'+moDe(oPhotos)+' Mo</strong> ('+nPhotos+' image(s))<br>'+
+        '\u2022 texte des '+nRapports+' rapport(s)\u00a0: '+moDe(oRapports)+' Mo<br>'+
+        '\u2022 fichier client\u00a0: '+moDe(oClients)+' Mo<br>'+
+        '\u2022 liste et divers\u00a0: '+moDe(oDivers)+' Mo';
+      if(nPhotos){
+        detail += '<br><br>Sur ces photos, <strong>'+moDe(oPhotos-oLocales)+' Mo</strong> sont '+
+          'déjà en ligne et peuvent être retirés de l\u2019appareil '+
+          '(bouton <strong>Libérer de la place</strong>).';
+        if(nLocales)
+          detail += '<br>'+nLocales+' image(s), soit '+moDe(oLocales)+' Mo, ne sont '+
+            '<strong>pas encore en ligne</strong>\u00a0: ce même bouton les déposera '+
+            'puis les retirera, une fois l\u2019appareil connecté.';
+      }
+
+      if(place)
+        ajouter('ok','M\u00e9moire de l\u2019appareil', mo+' Mo utilis\u00e9s \u2014 il reste de la place.'+detail);
+      else
+        ajouter('ko','M\u00e9moire pleine',
+          mo+' Mo utilis\u00e9s, et plus aucune \u00e9criture n\u2019est possible.<br>'+
+          'Les rapports re\u00e7us ne peuvent plus \u00eatre enregistr\u00e9s. '+
+          'Faites une sauvegarde (R\u00e9glages \u2192 Sauvegarder) puis supprimez d\u2019anciens rapports.'+detail);
+    }catch(e){
+      ajouter('att','M\u00e9moire de l\u2019appareil','\u00c9tat non mesurable sur ce navigateur.');
+    }
+
+    /* Références en double : vestiges du compteur local d'avant correction. */
+    var dbl = refsEnDouble();
+    if(dbl.length)
+      ajouter('att','Références en double',
+        dbl.length+' référence(s) portée(s) par plusieurs rapports : '+
+        esc(dbl.slice(0,6).map(function(d){ return d.ref+' (×'+d.n+')'; }).join(', '))+
+        (dbl.length>6?'…':'')+'. Les nouveaux rapports portent désormais vos initiales '+
+        'et ne peuvent plus se télescoper. Renumérotez ces anciens à la main si besoin.');
+    else
+      ajouter('ok','Références','Aucun doublon.');
+
+    /* Journal du dernier échange */
+    await chargerLog();
+    if(LOG.length){
+      ajouter('info','Journal du dernier \u00e9change',
+        LOG.map(function(l){ return l.h+' \u2014 '+esc(l.t)+(l.d?' : '+esc(l.d):''); }).join('<br>'));
+    } else {
+      ajouter('ko','Aucun journal','La synchronisation n\u2019a jamais d\u00e9marr\u00e9 sur cet appareil.');
+    }
+
+  }
+
   /* 2 — Contexte */
   if(location.protocol==='file:'){
     ajouter('ko','Ouverture locale','Supabase refuse les connexions depuis un fichier. Utilisez l\u2019adresse web.');
+    await blocsLocaux();
+    barreActions();
     return;
   }
   ajouter('ok','Contexte web', esc(location.host||''));
@@ -1256,7 +1354,8 @@ async function diagnostic(){
       else
         ajouter('ko','Table rapports ('+r1.status+')', esc(t1.slice(0,160)));
     }
-  }catch(e){ ajouter('ko','Table rapports','Serveur injoignable : '+esc(e.message)); return; }
+  }catch(e){ ajouter('ko','Table rapports','Serveur injoignable : '+esc(e.message));
+              await blocsLocaux(); barreActions(); return; }
 
   /* 4 — Lecture de la table clients */
   var nbClientsDistants = null;
@@ -1355,80 +1454,61 @@ async function diagnostic(){
     }
   }catch(e){}
 
-  /* État de la mémoire du navigateur : c'est elle qui lâche en premier
-     sur téléphone, et son échec était jusqu'ici silencieux. */
-  try{
-    var octets = 0;
-    for(var ci=0; ci<localStorage.length; ci++){
-      var cle = localStorage.key(ci);
-      if(cle && cle.indexOf(PFX)===0) octets += cle.length + (localStorage.getItem(cle)||'').length;
+  await blocsLocaux();
+
+  barreActions();
+
+  /* La barre d'actions était construite après les appels réseau : sans
+     serveur, on recevait le diagnostic sans le bouton pour y remédier. */
+  function barreActions(){
+    /* Bouton de synchronisation forcée */
+    var act=q('.mbox .mact');
+    if(act){
+      act.innerHTML =
+        '<button class="btn ghost" id="dg-close2">Fermer</button>'+
+        '<button class="btn ghost" id="dg-place">Lib\u00e9rer de la place</button>'+
+        '<button class="btn amber" id="dg-force" style="flex:1;justify-content:center;">'+
+          icon('save',14)+' Tout récupérer et tout renvoyer</button>';
+      q('#dg-close2').onclick=closeModal;
+      q('#dg-place').onclick=async function(){
+        var bp=q('#dg-place');
+        if(bp){ bp.disabled=true; bp.textContent='Nettoyage\u2026'; }
+        var res = await libererPlace();
+        if(bp){ bp.disabled=false; bp.textContent='Lib\u00e9rer de la place'; }
+        if(res.n){
+          toast(true, res.mo+' Mo lib\u00e9r\u00e9s sur '+res.n+' rapport(s)'+
+                      (res.montees ? ', apr\u00e8s mise en ligne de '+res.montees+' photo(s).' : '.'));
+        } else if(res.bloquees){
+          diagSync('Place non lib\u00e9rable pour l\u2019instant',
+            res.bloquees+' photo(s) occupent '+res.moBloques+' Mo mais <strong>ne sont pas '+
+            'encore en ligne</strong>. Les effacer les perdrait d\u00e9finitivement, '+
+            'l\u2019application ne le fait donc pas.<br><br>'+
+            (res.enLigne
+              ? 'Leur d\u00e9p\u00f4t vient d\u2019\u00eatre tent\u00e9 sans succ\u00e8s : l\u2019espace de stockage '+
+                'des photos est probablement inaccessible. Lancez le diagnostic, puis '+
+                'r\u00e9essayez.'
+              : 'Connectez l\u2019appareil \u00e0 Internet, puis appuyez de nouveau sur '+
+                '<strong>Lib\u00e9rer de la place</strong> : les photos seront d\u2019abord '+
+                'mises en ligne, puis retir\u00e9es de l\u2019appareil.'));
+        } else if(res.echecs){
+          diagSync('\u00c9criture impossible',
+            'La m\u00e9moire est trop pleine pour enregistrer m\u00eame un all\u00e8gement. '+
+            'Sauvegardez (R\u00e9glages \u2192 Sauvegarder), puis supprimez quelques anciens '+
+            'rapports depuis la liste.');
+        } else {
+          toast(true, 'Rien \u00e0 lib\u00e9rer : aucune image ne fait doublon avec le stockage en ligne.');
+        }
+        diagnostic();
+      };
+      q('#dg-force').onclick=async function(){
+        var b=q('#dg-force');
+        if(b){ b.disabled=true; b.textContent='Envoi en cours\u2026'; }
+        SY.last=0;
+        SY.busy=false;
+        await saveSync();
+        await synchroniser(false);
+      };
     }
-    var mo = Math.round(octets/104857.6)/10;     /* en Mo, une décimale */
-    /* Test réel : seule une écriture dit si la place existe encore. */
-    var place = true;
-    try{
-      var bourre = new Array(120000).join('x');   /* ~120 Ko */
-      localStorage.setItem(PFX+'__essai', bourre);
-      localStorage.removeItem(PFX+'__essai');
-    }catch(ex){ place = false; }
-    if(place)
-      ajouter('ok','M\u00e9moire de l\u2019appareil', mo+' Mo utilis\u00e9s \u2014 il reste de la place.');
-    else
-      ajouter('ko','M\u00e9moire pleine',
-        mo+' Mo utilis\u00e9s, et plus aucune \u00e9criture n\u2019est possible.<br>'+
-        'Les rapports re\u00e7us ne peuvent plus \u00eatre enregistr\u00e9s. '+
-        'Faites une sauvegarde (R\u00e9glages \u2192 Sauvegarder) puis supprimez d\u2019anciens rapports.');
-  }catch(e){
-    ajouter('att','M\u00e9moire de l\u2019appareil','\u00c9tat non mesurable sur ce navigateur.');
-  }
-
-  /* Références en double : vestiges du compteur local d'avant correction. */
-  var dbl = refsEnDouble();
-  if(dbl.length)
-    ajouter('att','Références en double',
-      dbl.length+' référence(s) portée(s) par plusieurs rapports : '+
-      esc(dbl.slice(0,6).map(function(d){ return d.ref+' (×'+d.n+')'; }).join(', '))+
-      (dbl.length>6?'…':'')+'. Les nouveaux rapports portent désormais vos initiales '+
-      'et ne peuvent plus se télescoper. Renumérotez ces anciens à la main si besoin.');
-  else
-    ajouter('ok','Références','Aucun doublon.');
-
-  /* Journal du dernier échange */
-  await chargerLog();
-  if(LOG.length){
-    ajouter('info','Journal du dernier \u00e9change',
-      LOG.map(function(l){ return l.h+' \u2014 '+esc(l.t)+(l.d?' : '+esc(l.d):''); }).join('<br>'));
-  } else {
-    ajouter('ko','Aucun journal','La synchronisation n\u2019a jamais d\u00e9marr\u00e9 sur cet appareil.');
-  }
-
-  /* Bouton de synchronisation forcée */
-  var act=q('.mbox .mact');
-  if(act){
-    act.innerHTML =
-      '<button class="btn ghost" id="dg-close2">Fermer</button>'+
-      '<button class="btn ghost" id="dg-place">Lib\u00e9rer de la place</button>'+
-      '<button class="btn amber" id="dg-force" style="flex:1;justify-content:center;">'+
-        icon('save',14)+' Tout récupérer et tout renvoyer</button>';
-    q('#dg-close2').onclick=closeModal;
-    q('#dg-place').onclick=async function(){
-      var bp=q('#dg-place');
-      if(bp){ bp.disabled=true; bp.textContent='Nettoyage\u2026'; }
-      var res = await libererPlace();
-      if(bp){ bp.disabled=false; bp.textContent='Lib\u00e9rer de la place'; }
-      toast(true, res.n
-        ? res.mo+' Mo lib\u00e9r\u00e9s sur '+res.n+' rapport(s).'
-        : 'Rien \u00e0 lib\u00e9rer : aucune image en double.');
-      diagnostic();
-    };
-    q('#dg-force').onclick=async function(){
-      var b=q('#dg-force');
-      if(b){ b.disabled=true; b.textContent='Envoi en cours\u2026'; }
-      SY.last=0;
-      SY.busy=false;
-      await saveSync();
-      await synchroniser(false);
-    };
   }
 }
 
@@ -1895,7 +1975,11 @@ function demanderCodeBureau(){
         '<p class="cfg-hint" style="margin-bottom:12px;">Le r\u00f4le Bureau donne acc\u00e8s \u00e0 tous les '+
         'rapports, \u00e0 la sauvegarde compl\u00e8te et au fichier client.</p>'+
         '<div class="f" style="margin-bottom:6px;"><label>Code</label>'+
-          '<input type="password" id="cb-code" inputmode="numeric" autocomplete="off"></div>'+
+          '<input type="password" id="cb-code" autocomplete="off" autocapitalize="none" '+
+            'autocorrect="off" spellcheck="false"></div>'+
+        '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;'+
+          'color:var(--ink-3);margin:-2px 0 8px;cursor:pointer;">'+
+          '<input type="checkbox" id="cb-voir" style="width:auto;margin:0;"> Afficher le code</label>'+
         '<p class="cfg-hint" id="cb-err" style="color:var(--rust);min-height:16px;"></p>'+
         '<div class="mact">'+
           '<button class="btn ghost" id="cb-non">Annuler</button>'+
@@ -1903,6 +1987,9 @@ function demanderCodeBureau(){
         '</div>'+
       '</div></div>';
     var inp=q('#cb-code'); if(inp) setTimeout(function(){ inp.focus(); },80);
+    /* Un code en toutes lettres se tape mal à l'aveugle sur un téléphone. */
+    var vu=q('#cb-voir');
+    if(vu) vu.onchange=function(){ var i=q('#cb-code'); if(i) i.type = vu.checked ? 'text' : 'password'; };
     function fini(ok){ closeModal(); resoudre(ok); }
     q('#cb-non').onclick=function(){ fini(false); };
     async function verifier(){
@@ -4228,8 +4315,14 @@ function proposerSuivi(r, blob, fname){
 var DELAI_SAUV = 7*24*3600*1000;      /* une semaine */
 
 async function noterSauvegarde(n){
-  try{ await sSet('sauv', {quand:Date.now(), n:n||0}); }catch(e){}
+  var ok=false;
+  try{ ok = await sSet('sauv', {quand:Date.now(), n:n||0}); }catch(e){}
   var bar=q('#sauv-bar'); if(bar) bar.remove();
+  /* Sans cette date, le rappel revient à chaque ouverture. Le dire, plutôt
+     que de laisser croire à un bandeau qui ne s'en va jamais. */
+  if(!ok) toast(false,'Sauvegarde faite, mais la date n\u2019a pas pu \u00eatre retenue '+
+                      '(m\u00e9moire pleine) : le rappel reviendra.');
+  return ok;
 }
 async function derniereSauvegarde(){
   try{ return await sGet('sauv'); }catch(e){ return null; }
@@ -4245,6 +4338,8 @@ function joursDepuis(t){ return Math.floor((Date.now()-t)/86400000); }
 /* Rappel discret en tête de liste, jamais bloquant. */
 async function rappelSauvegarde(){
   if(ST.view!=='list') return;
+  /* Un technicien ne peut pas sauvegarder : le lui réclamer est une impasse. */
+  if(SY.on && SY.role!=='bureau') return;
   if(!await sauvegardeDue()) return;
   var page=q('.page'); if(!page || q('#sauv-bar')) return;
   var s = await derniereSauvegarde();
@@ -4343,8 +4438,18 @@ async function peutEtreSauvegarder(){
   }catch(e){}
 }
 
+/* Un appareil en rôle Bureau mais non déverrouillé n'est pas un technicien :
+   on lui demande le code plutôt que de lui refuser l'action. */
+async function exigerBureau(){
+  if(estBureau()) return true;
+  if(SY.on && SY.role==='bureau' && !bureauDeverrouille())
+    return await deverrouillerBureau();
+  toast(false,'R\u00e9serv\u00e9 au r\u00f4le Bureau.');
+  return false;
+}
+
 async function exportData(){
-  if(!estBureau()){ toast(false,'R\u00e9serv\u00e9 au r\u00f4le Bureau.'); return; }
+  if(!await exigerBureau()) return;
   try{
     toast(true,'Pr\u00e9paration de la sauvegarde\u2026');
     var reports=[];
@@ -4800,19 +4905,39 @@ async function lireRapport(id){
    retéléchargées au moment d'imprimer, inutile de les garder sur l'appareil.
    Une image non encore transmise est conservée : elle n'existe nulle part ailleurs. */
 async function libererPlace(){
-  var liberes = 0, touches = 0;
+  var liberes = 0, touches = 0, montees = 0, bloquees = 0, octBloques = 0, echecs = 0;
   for(var i=0;i<ST.idx.length;i++){
     var r = null;
     try{ r = await sGet('r:'+ST.idx[i].id); }catch(e){}
     if(!r || !r.photos || !r.photos.length) continue;
+
+    /* Une image qui n'est pas encore en ligne ne peut pas être retirée de
+       l'appareil sans être perdue. On la dépose d'abord : c'est là que se
+       trouve presque toute la place récupérable d'un téléphone saturé. */
+    if(SY.on){
+      for(var j=0;j<r.photos.length;j++){
+        var ph = r.photos[j];
+        if(ph.dataUrl && !ph.url){
+          try{ var u = await envoyerPhoto(r.id, ph); if(u){ ph.url = u; montees++; } }catch(e){}
+        }
+      }
+    }
+
     var gain = 0;
     r.photos.forEach(function(ph){
       if(ph.url && ph.dataUrl){ gain += String(ph.dataUrl).length; delete ph.dataUrl; }
+      else if(ph.dataUrl){ bloquees++; octBloques += String(ph.dataUrl).length; }
     });
     if(!gain) continue;
-    try{ await sSet('r:'+r.id, r); liberes += gain; touches++; }catch(e){}
+    /* Ne compter que ce qui a réellement été écrit : l'ancienne version
+       annonçait des méga-octets libérés même quand l'écriture échouait. */
+    var ecrit = false;
+    try{ ecrit = await sSet('r:'+r.id, r); }catch(e){}
+    if(ecrit){ liberes += gain; touches++; } else echecs++;
   }
-  return {mo: Math.round(liberes/104857.6)/10, n: touches};
+  return {mo: Math.round(liberes/104857.6)/10, n: touches, montees: montees,
+          bloquees: bloquees, moBloques: Math.round(octBloques/104857.6)/10,
+          echecs: echecs, enLigne: !!SY.on};
 }
 
 function messageIntrouvable(){
