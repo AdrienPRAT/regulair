@@ -1002,7 +1002,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.22-1030';
+var VERSION = '2026.10.22-1115';
 
 async function verifierMaj(silencieux){
   try{
@@ -1727,8 +1727,33 @@ async function completerPhotos(r){
     var d = await rapatrierPhoto(manquantes[i]);
     if(d) manquantes[i].dataUrl = d;
   }
-  try{ await sSet('r:'+r.id, r); }catch(e){}
+  /* Les images rapatriées servent à produire le PDF, et rien d'autre : les
+     réécrire sur l'appareil remplissait la mémoire à chaque consultation
+     d'un rapport, jusqu'à ce qu'aucun rapport reçu ne puisse plus être
+     enregistré. Elles restent donc uniquement dans l'objet en mémoire. */
   return r;
+}
+
+/* Une image déposée en ligne n'a plus besoin d'occuper l'appareil. On la
+   conserve pour le rapport ouvert — celui qu'on est peut-être en train de
+   rédiger sans réseau — et on retire les autres. C'est ce qui empêche la
+   mémoire de croître sans fin au fil des interventions. */
+async function allegerPhotosLocales(){
+  var liberes = 0;
+  for(var i=0;i<ST.idx.length;i++){
+    var id = ST.idx[i].id;
+    if(ST.cur && ST.cur.id === id) continue;
+    var r = null;
+    try{ r = await sGet('r:'+id); }catch(e){}
+    if(!r || !r.photos || !r.photos.length) continue;
+    var gain = 0;
+    r.photos.forEach(function(ph){
+      if(ph.url && ph.dataUrl){ gain += String(ph.dataUrl).length; delete ph.dataUrl; }
+    });
+    if(!gain) continue;
+    try{ if(await sSet('r:'+r.id, r)) liberes += gain; }catch(e){}
+  }
+  return liberes;
 }
 
 /* ─── Envoi d'un rapport ─── */
@@ -1817,6 +1842,14 @@ async function synchroniser(silencieux){
        l'envoi : un appareil doit apprendre qu'un rapport a été supprimé
        avant de risquer de le renvoyer et de le faire resurgir. */
     if(!await pousserTombes()) noter('Suppressions', 'reportées');
+
+    /* Faire de la place AVANT de recevoir : sans cela, les rapports des
+       collaborateurs arrivaient dans une mémoire pleine et n'étaient pas
+       enregistrés (« Non enregistré (mémoire pleine) »). */
+    try{
+      var degage = await allegerPhotosLocales();
+      if(degage) noter('Place lib\u00e9r\u00e9e', Math.round(degage/104857.6)/10+' Mo d\u2019images d\u00e9j\u00e0 en ligne');
+    }catch(e){}
 
     majProgres('R\u00e9ception', 0, 0);
     /* 1 ─ Réception d'abord : on apprend ce qui a changé ailleurs */
