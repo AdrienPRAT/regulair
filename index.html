@@ -536,19 +536,141 @@ var LS = (function(){ try{ localStorage.setItem('__t','1'); localStorage.removeI
 var MEM = {};
 var PFX = 'regulair:';
 
+/* ─── IndexedDB ───────────────────────────────────────────────────────────
+   localStorage n'accorde qu'environ 5 Mo sur iPhone, photos comprises : la
+   mémoire se remplissait en quelques interventions et les rapports reçus ne
+   pouvaient plus être enregistrés. IndexedDB offre plusieurs centaines de Mo
+   sur le même téléphone. Les valeurs y sont rangées sous la même forme (du
+   texte JSON) pour que le reste de l'application ne change pas. */
+var IDB = null;          /* promesse : base ouverte, ou null si indisponible */
+var IDB_OK = false;
+
+function idbOuvrir(){
+  if(IDB !== null) return IDB;
+  IDB = new Promise(function(res){
+    var fini = false;
+    function rendre(v){ if(!fini){ fini = true; IDB_OK = !!v; res(v); } }
+    try{
+      if(!window.indexedDB){ rendre(null); return; }
+      var rq = indexedDB.open('regulair', 1);
+      rq.onupgradeneeded = function(){
+        var db = rq.result;
+        if(!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      };
+      rq.onsuccess = function(){ rendre(rq.result); };
+      rq.onerror   = function(){ rendre(null); };
+      rq.onblocked = function(){ rendre(null); };
+      /* Safari en navigation privée peut ne jamais répondre : on n'attend pas. */
+      setTimeout(function(){ rendre(null); }, 4000);
+    }catch(e){ rendre(null); }
+  });
+  return IDB;
+}
+
+function idbGet(k){
+  return idbOuvrir().then(function(db){
+    if(!db) return undefined;
+    return new Promise(function(res){
+      try{
+        var rq = db.transaction('kv','readonly').objectStore('kv').get(k);
+        rq.onsuccess = function(){ res(rq.result); };
+        rq.onerror   = function(){ res(undefined); };
+      }catch(e){ res(undefined); }
+    });
+  });
+}
+function idbSet(k, txt){
+  return idbOuvrir().then(function(db){
+    if(!db) return false;
+    return new Promise(function(res){
+      try{
+        var tr = db.transaction('kv','readwrite');
+        tr.objectStore('kv').put(txt, k);
+        tr.oncomplete = function(){ res(true); };
+        tr.onerror = tr.onabort = function(){ res(false); };
+      }catch(e){ res(false); }
+    });
+  });
+}
+function idbDel(k){
+  return idbOuvrir().then(function(db){
+    if(!db) return false;
+    return new Promise(function(res){
+      try{
+        var tr = db.transaction('kv','readwrite');
+        tr.objectStore('kv').delete(k);
+        tr.oncomplete = function(){ res(true); };
+        tr.onerror = tr.onabort = function(){ res(false); };
+      }catch(e){ res(false); }
+    });
+  });
+}
+function idbCles(){
+  return idbOuvrir().then(function(db){
+    if(!db) return [];
+    return new Promise(function(res){
+      try{
+        var rq = db.transaction('kv','readonly').objectStore('kv').getAllKeys();
+        rq.onsuccess = function(){ res(rq.result||[]); };
+        rq.onerror   = function(){ res([]); };
+      }catch(e){ res([]); }
+    });
+  });
+}
+
+/* Déménagement unique : tout ce qui dort dans localStorage passe en
+   IndexedDB, puis libère la place qu'il occupait. Sans réseau, sans perte,
+   et sans que l'utilisateur ait quoi que ce soit à faire. */
+async function migrerVersIDB(){
+  if(!LS) return 0;
+  var db = await idbOuvrir();
+  if(!db) return 0;
+  var cles = [];
+  try{
+    for(var i=0;i<localStorage.length;i++){
+      var c = localStorage.key(i);
+      if(c && c.indexOf(PFX)===0) cles.push(c);
+    }
+  }catch(e){ return 0; }
+  var deplaces = 0;
+  for(var j=0;j<cles.length;j++){
+    var cle = cles[j], val = null;
+    try{ val = localStorage.getItem(cle); }catch(e){}
+    if(val == null) continue;
+    var dedans = await idbGet(cle);
+    /* On n'écrase pas une valeur déjà migrée : elle est forcément plus récente. */
+    if(dedans === undefined){
+      if(!await idbSet(cle, val)) continue;
+    }
+    try{ localStorage.removeItem(cle); deplaces += val.length; }catch(e){}
+  }
+  return deplaces;
+}
+
 async function sGet(k){
   if(HS){ try{ var r=await window.storage.get(k,false); return r?JSON.parse(r.value):null; }catch(e){} }
+  var vi = await idbGet(PFX+k);
+  if(vi !== undefined && vi !== null){ try{ return JSON.parse(vi); }catch(e){} }
   if(LS){ try{ var v=localStorage.getItem(PFX+k); return v?JSON.parse(v):null; }catch(e){} }
   return (k in MEM) ? MEM[k] : null;
 }
+var QUOTA_DIT = false;     /* un seul avertissement par session, pas trois */
+
 async function sSet(k,v){
-  var ok=false;
-  if(HS){ try{ await window.storage.set(k,JSON.stringify(v),false); ok=true; }catch(e){} }
-  if(LS){
-    try{ localStorage.setItem(PFX+k, JSON.stringify(v)); ok=true; }
+  var ok=false, txt;
+  try{ txt = JSON.stringify(v); }catch(e){ return false; }
+  if(HS){ try{ await window.storage.set(k,txt,false); ok=true; }catch(e){} }
+  /* IndexedDB d'abord : c'est le seul magasin assez grand pour des photos. */
+  if(await idbSet(PFX+k, txt)){
+    ok = true;
+    /* La copie localStorage ferait doublon et occupe une place rare. */
+    if(LS){ try{ localStorage.removeItem(PFX+k); }catch(e){} }
+  }
+  else if(LS){
+    try{ localStorage.setItem(PFX+k, txt); ok=true; }
     catch(e){
-      /* Quota dépassé : prévenir plutôt que perdre des données en silence */
-      if(e && (e.name==='QuotaExceededError' || e.code===22)){
+      if(e && (e.name==='QuotaExceededError' || e.code===22) && !QUOTA_DIT){
+        QUOTA_DIT = true;
         try{ toast(false,'M\u00e9moire du navigateur pleine. Exportez une sauvegarde puis supprimez d\u2019anciens rapports.'); }catch(_){}
       }
     }
@@ -557,11 +679,12 @@ async function sSet(k,v){
   /* Dire la vérité : « ok || true » masquait tout échec d'écriture, et un
      rapport reçu mais non enregistré devenait « introuvable » au rechargement.
      Sans aucun stockage durable (environnement de test), on n'alerte pas. */
-  var durable = HS || LS;
+  var durable = HS || IDB_OK || LS;
   return durable ? ok : true;
 }
 async function sDel(k){
   if(HS){ try{ await window.storage.delete(k,false); }catch(e){} }
+  try{ await idbDel(PFX+k); }catch(e){}
   if(LS){ try{ localStorage.removeItem(PFX+k); }catch(e){} }
   delete MEM[k];
   return true;
@@ -1002,7 +1125,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.22-1115';
+var VERSION = '2026.10.22-1200';
 
 async function verifierMaj(silencieux){
   try{
@@ -1244,10 +1367,26 @@ async function diagnostic(){
     try{
       var octets = 0, oPhotos = 0, oRapports = 0, oClients = 0, oDivers = 0;
       var nPhotos = 0, nLocales = 0, oLocales = 0, nRapports = 0;
-      for(var ci=0; ci<localStorage.length; ci++){
-        var cle = localStorage.key(ci);
-        if(!cle || cle.indexOf(PFX)!==0) continue;
-        var val = localStorage.getItem(cle) || '';
+      /* On mesure le magasin réellement utilisé : IndexedDB si disponible,
+         localStorage sinon. */
+      var cles = [];
+      if(IDB_OK){
+        var kk = await idbCles();
+        for(var z=0; z<kk.length; z++)
+          if(String(kk[z]).indexOf(PFX)===0) cles.push(String(kk[z]));
+      }
+      if(!cles.length){
+        for(var zz=0; zz<localStorage.length; zz++){
+          var ck = localStorage.key(zz);
+          if(ck && ck.indexOf(PFX)===0) cles.push(ck);
+        }
+      }
+      for(var ci=0; ci<cles.length; ci++){
+        var cle = cles[ci];
+        var val = null;
+        if(IDB_OK){ try{ val = await idbGet(cle); }catch(e3){} }
+        if(val == null){ try{ val = localStorage.getItem(cle); }catch(e4){} }
+        val = val || '';
         var taille = cle.length + val.length;
         octets += taille;
         var court = cle.slice(PFX.length);
@@ -4738,6 +4877,9 @@ function libBadge(){
 
 /* ===== INIT ===== */
 async function init(){
+  /* Déménagement avant toute lecture : les données changent de magasin une
+     fois pour toutes, et la place occupée dans localStorage est rendue. */
+  try{ await migrerVersIDB(); }catch(e){}
   var cfg=await sGet('cfg');
   ST.cfg=cfg||{tech:'',footer:CO_ADDR+'\n'+CO_LEGAL,suiviMail:CO_MAIL,suiviAuto:true};
   if(ST.cfg.suiviAuto===undefined)ST.cfg.suiviAuto=true;
