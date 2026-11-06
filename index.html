@@ -1125,7 +1125,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.11.06-1210';
+var VERSION = '2026.11.06-1245';
 
 async function verifierMaj(silencieux){
   try{
@@ -4477,26 +4477,31 @@ async function envoyerSuivi(r, blob, fname, destOverride){
        On essaie donc du plus riche au plus simple, en validant chaque fois
        exactement ce que l'on s'apprête à envoyer. Le PDF prime sur le texte :
        c'est lui le rapport. */
-    var charges = [
-      {title:suj, text:corps, files:[file]},
-      {title:suj, files:[file]},
-      {files:[file]}
-    ];
-    for(var ic=0; ic<charges.length; ic++){
-      if(navigator.canShare && !navigator.canShare(charges[ic])) continue;
-      try{
-        var pShare = navigator.share(charges[ic]);   /* l'appel part d'abord */
-        closeModal();                                /* la fen\u00eatre se ferme ensuite */
-        await pShare;
-        await marquerEnvoye();
-        toast(true,'Rapport transmis.');
-        return;
-      }catch(e){
-        if(e && e.name==='AbortError') return;    /* l'utilisateur a renoncé */
-        /* Taire la raison, c'était laisser le collaborateur devant un mail
-           vide sans comprendre. On garde la dernière pour l'afficher. */
-        echecPartage = (e && (e.name||e.message)) ? String(e.name||e.message) : 'inconnue';
-      }
+    /* Une seule tentative. Enchaîner plusieurs essais se retournait contre
+       nous : les suivants partent après un await, donc sans autorisation
+       utilisateur, et Chrome les refuse pour cette raison-là — en masquant
+       la vraie cause du premier échec. On choisit donc en amont la charge la
+       plus riche que le téléphone valide, et on l'envoie une seule fois. */
+    var charge = {files:[file]};
+    if(navigator.canShare){
+      if(navigator.canShare({title:suj, text:corps, files:[file]}))
+        charge = {title:suj, text:corps, files:[file]};
+      else if(navigator.canShare({title:suj, files:[file]}))
+        charge = {title:suj, files:[file]};
+    }
+    try{
+      var pShare = navigator.share(charge);   /* l'appel part d'abord */
+      closeModal();                           /* la fenêtre se ferme ensuite */
+      await pShare;
+      await marquerEnvoye();
+      toast(true,'Rapport transmis.');
+      return;
+    }catch(e){
+      if(e && e.name==='AbortError') return;  /* l'utilisateur a renoncé */
+      /* Le nom seul ne distingue pas « geste utilisateur exigé » d'un partage
+         déjà en cours : seul le message de Chrome le dit. */
+      echecPartage = String((e && e.name) || 'erreur') +
+                     ((e && e.message) ? ' \u2014 ' + e.message : '');
     }
   }
 
