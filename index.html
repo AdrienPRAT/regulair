@@ -1125,7 +1125,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.11.06-1030';
+var VERSION = '2026.11.06-1130';
 
 async function verifierMaj(silencieux){
   try{
@@ -4444,20 +4444,36 @@ async function envoyerSuivi(r, blob, fname, destOverride){
     partageFichiers = !!(navigator.canShare && navigator.canShare({files:[file]}));
   }catch(e){}
   if(partageFichiers){
-    try{
-      await navigator.share({title:suj, text:corps, files:[file]});
-      await marquerEnvoye();
-      toast(true,'Rapport transmis.');
-      return;
-    }catch(e){
-      if(e && e.name==='AbortError') return;      /* l'utilisateur a renoncé */
-      /* Taire la raison, c'était laisser le collaborateur devant un mail vide
-         sans comprendre. On la garde pour l'afficher. */
-      echecPartage = (e && (e.name||e.message)) ? String(e.name||e.message) : 'inconnue';
+    /* On validait le fichier seul, puis on partageait titre + texte + fichier :
+       une combinaison jamais vérifiée, que les téléphones refusent souvent.
+       On essaie donc du plus riche au plus simple, en validant chaque fois
+       exactement ce que l'on s'apprête à envoyer. Le PDF prime sur le texte :
+       c'est lui le rapport. */
+    var charges = [
+      {title:suj, text:corps, files:[file]},
+      {title:suj, files:[file]},
+      {files:[file]}
+    ];
+    for(var ic=0; ic<charges.length; ic++){
+      if(navigator.canShare && !navigator.canShare(charges[ic])) continue;
+      try{
+        var pShare = navigator.share(charges[ic]);   /* l'appel part d'abord */
+        closeModal();                                /* la fen\u00eatre se ferme ensuite */
+        await pShare;
+        await marquerEnvoye();
+        toast(true,'Rapport transmis.');
+        return;
+      }catch(e){
+        if(e && e.name==='AbortError') return;    /* l'utilisateur a renoncé */
+        /* Taire la raison, c'était laisser le collaborateur devant un mail
+           vide sans comprendre. On garde la dernière pour l'afficher. */
+        echecPartage = (e && (e.name||e.message)) ? String(e.name||e.message) : 'inconnue';
+      }
     }
   }
 
-  /* ── Ordinateur ── */
+  /* ── Repli ── */
+  closeModal();
   var url=URL.createObjectURL(blob);
   var gmail='https://mail.google.com/mail/?view=cm&fs=1&to='+encodeURIComponent(dest)+
             '&su='+encodeURIComponent(suj)+'&body='+encodeURIComponent(corps);
@@ -4561,13 +4577,14 @@ function proposerSuivi(r, blob, fname){
   q('#suivi-go').onclick=function(){
     var v=q('#suivi-dest').value.trim();
     var memoriser = q('#suivi-remember').checked;
-    closeModal();
 
-    /* Le partage natif du téléphone n'est autorisé que dans la foulée
-       immédiate du clic : la moindre attente (enregistrement du client,
-       écriture, réseau) fait expirer cette autorisation, le partage est
-       refusé en silence et l'on retombe sur un mail vide, sans PDF joint.
-       On partage donc d'abord, et on mémorise l'adresse ensuite. */
+    /* Le partage natif n'est autorisé que dans la foulée immédiate de
+       l'appui : la moindre opération intercalée — enregistrement du client,
+       écriture, et jusqu'à la fermeture de cette fenêtre — peut faire
+       expirer l'autorisation. Chrome répond alors NotAllowedError, le
+       partage est perdu et l'on retombe sur un mail vide, sans PDF.
+       On partage donc en tout premier ; la fenêtre se ferme ensuite, et
+       l'adresse est mémorisée après. */
     var partage = envoyerSuivi(r, blob, fname, v);
 
     if(memoriser && v){
