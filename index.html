@@ -1125,7 +1125,7 @@ async function chargerLog(){
 /* ═══════════ VÉRIFICATION DES MISES À JOUR ═══════════
    Les navigateurs — et surtout iOS — conservent longtemps le cache.
    On interroge le fichier en ligne et on signale toute nouvelle version. */
-var VERSION = '2026.10.22-1240';
+var VERSION = '2026.11.06-1030';
 
 async function verifierMaj(silencieux){
   try{
@@ -1351,10 +1351,16 @@ async function diagnostic(){
   if(SY.role==='bureau'){
     ajouter('ok','Identit\u00e9', esc(SY.user||'(non renseign\u00e9)')+' \u2014 r\u00f4le Bureau : tous les rapports de l\u2019\u00e9quipe sont affich\u00e9s.');
   }else{
-    ajouter('att','R\u00f4le Technicien',
-      esc(SY.user||'(non renseign\u00e9)')+' \u2014 la liste n\u2019affiche que les rapports \u00e0 ce nom. '+
-      'Les rapports de vos collaborateurs sont bien re\u00e7us mais masqu\u00e9s. '+
-      'Passez le r\u00f4le sur <strong>Bureau</strong> dans les R\u00e9glages pour les voir.');
+    if(CFG_RAPPORTS_PARTAGES)
+      ajouter('ok','R\u00f4le Technicien',
+        esc(SY.user||'(non renseign\u00e9)')+' \u2014 les rapports de toute l\u2019\u00e9quipe sont affich\u00e9s. '+
+        'La sauvegarde, l\u2019export de facturation et le registre des fluides restent '+
+        'r\u00e9serv\u00e9s au r\u00f4le Bureau.');
+    else
+      ajouter('att','R\u00f4le Technicien',
+        esc(SY.user||'(non renseign\u00e9)')+' \u2014 la liste n\u2019affiche que les rapports \u00e0 ce nom. '+
+        'Les rapports de vos collaborateurs sont bien re\u00e7us mais masqu\u00e9s. '+
+        'Passez le r\u00f4le sur <strong>Bureau</strong> dans les R\u00e9glages pour les voir.');
   }
 
   /* Contrôles qui ne dépendent pas du réseau. Ils étaient placés après les
@@ -1419,7 +1425,24 @@ async function diagnostic(){
         localStorage.setItem(PFX+'__essai', bourre);
         localStorage.removeItem(PFX+'__essai');
       }catch(ex){ place = false; }
-      /* Sans ce détail, « mémoire pleine » ne dit pas quoi faire. */
+      /* Le partage de fichiers décide si le PDF peut être joint au mail :
+       sans lui, aucune pièce jointe n'est possible depuis un navigateur. */
+    try{
+      var essaiF = new File([new Blob(['x'],{type:'application/pdf'})],'t.pdf',{type:'application/pdf'});
+      if(navigator.canShare && navigator.canShare({files:[essaiF]}))
+        ajouter('ok','Pi\u00e8ce jointe au mail',
+          'Le partage de fichiers fonctionne : le PDF est joint automatiquement. '+
+          'Dans le menu de partage, choisissez votre messagerie.');
+      else if(navigator.share)
+        ajouter('att','Pi\u00e8ce jointe au mail',
+          'Cet appareil partage du texte mais <strong>pas de fichier</strong>. '+
+          'Le PDF devra \u00eatre joint \u00e0 la main depuis les T\u00e9l\u00e9chargements.');
+      else
+        ajouter('att','Pi\u00e8ce jointe au mail',
+          'Pas de partage natif : t\u00e9l\u00e9chargez le PDF puis joignez-le au message.');
+    }catch(e5){ ajouter('att','Pi\u00e8ce jointe au mail','Non v\u00e9rifiable sur ce navigateur.'); }
+
+    /* Sans ce détail, « mémoire pleine » ne dit pas quoi faire. */
       var detail =
         '<br><br>Détail\u00a0:<br>'+
         '\u2022 photos\u00a0: <strong>'+moDe(oPhotos)+' Mo</strong> ('+nPhotos+' image(s))<br>'+
@@ -1634,6 +1657,9 @@ async function diagnostic(){
     /* Bouton de synchronisation forcée */
     var act=q('.mbox .mact');
     if(act){
+      /* Trois boutons sur une seule ligne débordent d'un écran de 320 px :
+         « Fermer » se retrouvait hors champ. On autorise le retour à la ligne. */
+      act.style.flexWrap = 'wrap';
       act.innerHTML =
         '<button class="btn ghost" id="dg-close2">Fermer</button>'+
         '<button class="btn ghost" id="dg-place">Lib\u00e9rer de la place</button>'+
@@ -2282,7 +2308,16 @@ function fenetreDefinirCode(){
 function estBureau(){ return !SY.on || (SY.role==='bureau' && bureauDeverrouille()); }
 
 /* Le bureau voit tout, un technicien ne voit que ses rapports */
+/* Les techniciens voient-ils les rapports de toute l'équipe ?
+     true  : chacun voit tout — choix du 29/10/2026
+     false : chacun ne voit que les siens
+   Les écrans sensibles (fichier client, registre des fluides, export de
+   facturation, sauvegarde) restent verrouillés sur le rôle Bureau dans les
+   deux cas : ce réglage ne concerne que l'affichage des rapports. */
+var CFG_RAPPORTS_PARTAGES = true;
+
 function visibleParMoi(e){
+  if(CFG_RAPPORTS_PARTAGES) return true;
   if(estBureau()) return true;      /* bureau d\u00e9verrouill\u00e9, ou usage mono-poste */
   var moi=(SY.user||ST.cfg.tech||'').trim().toLowerCase();
   if(!moi) return true;
@@ -4403,15 +4438,24 @@ async function envoyerSuivi(r, blob, fname, destOverride){
   }
 
   /* ── Mobile : partage natif, PDF joint automatiquement ── */
+  var file = null, partageFichiers = false, echecPartage = '';
   try{
-    var file=new File([blob],fname,{type:'application/pdf'});
-    if(navigator.canShare && navigator.canShare({files:[file]})){
+    file = new File([blob],fname,{type:'application/pdf'});
+    partageFichiers = !!(navigator.canShare && navigator.canShare({files:[file]}));
+  }catch(e){}
+  if(partageFichiers){
+    try{
       await navigator.share({title:suj, text:corps, files:[file]});
       await marquerEnvoye();
       toast(true,'Rapport transmis.');
       return;
+    }catch(e){
+      if(e && e.name==='AbortError') return;      /* l'utilisateur a renoncé */
+      /* Taire la raison, c'était laisser le collaborateur devant un mail vide
+         sans comprendre. On la garde pour l'afficher. */
+      echecPartage = (e && (e.name||e.message)) ? String(e.name||e.message) : 'inconnue';
     }
-  }catch(e){ if(e && e.name==='AbortError') return; }
+  }
 
   /* ── Ordinateur ── */
   var url=URL.createObjectURL(blob);
@@ -4425,14 +4469,34 @@ async function envoyerSuivi(r, blob, fname, destOverride){
       '<h3>Envoi du rapport</h3>'+
       '<div class="env-dest"><span>\u00c0</span><code>'+esc(dest||'\u2014')+'</code>'+
         '<button class="btn ghost sm" id="cp-dest">Copier</button></div>'+
-      '<a class="btn amber" style="justify-content:center;width:100%;margin-bottom:12px;" href="'+url+'" download="'+esc(fname)+'">'+icon('save',14)+' 1. T\u00e9l\u00e9charger le PDF</a>'+
-      '<p class="cfg-hint" style="margin-bottom:8px;">2. Ouvrir la messagerie :</p>'+
+      (echecPartage
+        ? '<p class="cfg-hint" style="background:#FCF7E8;border:1.5px solid #E0D2A8;'+
+          'border-radius:8px;padding:10px 12px;margin-bottom:12px;">'+
+          'Le partage direct a \u00e9t\u00e9 refus\u00e9 par le t\u00e9l\u00e9phone ('+esc(echecPartage)+').</p>'
+        : '')+
+      /* Sur téléphone, « glissez le PDF dans le message » n'a aucun sens : il
+         n'y a pas de glisser-déposer, et mailto: ne peut rien joindre. */
+      (partageFichiers
+        ? '<button class="btn amber" id="env-partage" style="justify-content:center;width:100%;margin-bottom:12px;">'+
+            icon('mail',14)+' Partager le PDF (pi\u00e8ce jointe)</button>'+
+          '<p class="cfg-hint" style="margin-bottom:10px;">Choisissez votre messagerie dans le menu de partage\u00a0: '+
+            'le PDF y sera joint automatiquement.</p>'+
+          '<div class="cfg-sep"></div>'+
+          '<p class="cfg-hint" style="margin-bottom:8px;">Ou bien, sans pi\u00e8ce jointe\u00a0:</p>'
+        : '<a class="btn amber" style="justify-content:center;width:100%;margin-bottom:12px;" href="'+url+'" download="'+esc(fname)+'">'+icon('save',14)+' 1. T\u00e9l\u00e9charger le PDF</a>'+
+          '<p class="cfg-hint" style="margin-bottom:8px;">2. Ouvrir la messagerie\u00a0:</p>')+
       '<div class="env-apps">'+
         '<a class="env-app" href="'+esc(mlink)+'">'+icon('mail',15)+' Application par d\u00e9faut</a>'+
         '<a class="env-app" href="'+esc(gmail)+'" target="_blank" rel="noopener">Gmail</a>'+
         '<a class="env-app" href="'+esc(outlook)+'" target="_blank" rel="noopener">Outlook web</a>'+
       '</div>'+
-      '<p class="cfg-hint">3. Glissez le PDF t\u00e9l\u00e9charg\u00e9 dans le message.</p>'+
+      '<p class="cfg-hint">'+
+        (partageFichiers
+          ? 'Ces trois raccourcis ouvrent un message <strong>sans le PDF</strong>\u00a0: '+
+            'le format <code>mailto:</code> ne permet aucune pi\u00e8ce jointe. '+
+            'Pour joindre le rapport, utilisez le bouton de partage ci-dessus.'
+          : '3. Glissez le PDF t\u00e9l\u00e9charg\u00e9 dans le message.')+
+      '</p>'+
       '<div class="mact">'+
         '<button class="btn ghost" id="env-annuler">Fermer</button>'+
         '<button class="btn amber" id="env-ok">'+icon('check',14)+' Message envoy\u00e9</button>'+
@@ -4443,6 +4507,16 @@ async function envoyerSuivi(r, blob, fname, destOverride){
   q('#mbg').onclick=function(e){ if(e.target.id==='mbg') cleanup(); };
   q('#env-annuler').onclick=cleanup;
   q('#env-ok').onclick=async function(){ cleanup(); await marquerEnvoye(); toast(true,'Rapport marqu\u00e9 comme envoy\u00e9.'); };
+  /* Nouvelle tentative de partage, déclenchée par un clic frais : c'est
+     précisément l'autorisation qui manquait au premier essai. */
+  if(q('#env-partage')) q('#env-partage').onclick=function(){
+    navigator.share({title:suj, files:[file]}).then(function(){
+      cleanup(); marquerEnvoye(); toast(true,'Rapport transmis.');
+    }).catch(function(e){
+      if(e && e.name==='AbortError') return;
+      toast(false,'Partage refus\u00e9 : '+esc(String(e && (e.name||e.message)||'')));
+    });
+  };
   /* Ouvrir la messagerie vaut envoi : c'est le geste que l'on peut observer.
      Sans cela, le rapport restait « en attente » d\u00e8s qu'on fermait la fen\u00eatre. */
   Array.prototype.forEach.call(document.querySelectorAll('.env-app'), function(a){
@@ -4484,29 +4558,39 @@ function proposerSuivi(r, blob, fname){
     '</div></div>';
   q('#mbg').onclick=function(e){ if(e.target.id==='mbg') closeModal(); };
   q('#suivi-skip').onclick=closeModal;
-  q('#suivi-go').onclick=async function(){
+  q('#suivi-go').onclick=function(){
     var v=q('#suivi-dest').value.trim();
-    /* « Mémoriser » ne doit retenir que l'adresse du client, rattachée à sa
-       fiche — pas la liste complète recopiée dans les réglages généraux. */
-    if(q('#suivi-remember').checked && v){
-      var cli = clientDuRapport(r);
-      var connues = {};
-      [CO_MAIL, ST.cfg.suiviMail, ST.cfg.suiteMail].forEach(function(a){
-        String(a||'').split(/[;,\s]+/).forEach(function(x){ if(x) connues[x.toLowerCase()]=1; });
-      });
-      var nouvelles = v.split(/[;,\s]+/).filter(function(x){ return x && !connues[x.toLowerCase()]; });
-      if(cli && nouvelles.length){
-        cli.email = nouvelles.join(', ');
-        cli.maj = Date.now();
-        await saveClients();
-        if(SY.on) pousserClient(cli);
-      } else if(!cli && nouvelles.length){
-        r.clientEmail = nouvelles.join(', ');   /* pas de fiche : on garde sur le rapport */
-        try{ await sSet('r:'+r.id, r); }catch(e){}
-      }
-    }
+    var memoriser = q('#suivi-remember').checked;
     closeModal();
-    envoyerSuivi(r,blob,fname,v);
+
+    /* Le partage natif du téléphone n'est autorisé que dans la foulée
+       immédiate du clic : la moindre attente (enregistrement du client,
+       écriture, réseau) fait expirer cette autorisation, le partage est
+       refusé en silence et l'on retombe sur un mail vide, sans PDF joint.
+       On partage donc d'abord, et on mémorise l'adresse ensuite. */
+    var partage = envoyerSuivi(r, blob, fname, v);
+
+    if(memoriser && v){
+      partage.then(async function(){
+        /* « Mémoriser » ne doit retenir que l'adresse du client, rattachée à
+           sa fiche — pas la liste complète recopiée dans les réglages. */
+        var cli = clientDuRapport(r);
+        var connues = {};
+        [CO_MAIL, ST.cfg.suiviMail, ST.cfg.suiteMail].forEach(function(a){
+          String(a||'').split(/[;,\s]+/).forEach(function(x){ if(x) connues[x.toLowerCase()]=1; });
+        });
+        var nouvelles = v.split(/[;,\s]+/).filter(function(x){ return x && !connues[x.toLowerCase()]; });
+        if(cli && nouvelles.length){
+          cli.email = nouvelles.join(', ');
+          cli.maj = Date.now();
+          await saveClients();
+          if(SY.on) pousserClient(cli);
+        } else if(!cli && nouvelles.length){
+          r.clientEmail = nouvelles.join(', ');   /* pas de fiche : on garde sur le rapport */
+          try{ await sSet('r:'+r.id, r); }catch(e){}
+        }
+      });
+    }
   };
 }
 
